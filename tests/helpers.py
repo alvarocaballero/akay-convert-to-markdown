@@ -17,7 +17,7 @@ def make_settings(**overrides) -> Settings:
         destination_container_name="markdown",
         servicebus_fully_qualified_namespace="fake.servicebus.windows.net",
         servicebus_queue_name="conversion",
-        webhook_url="https://webhook.example.com/akay",
+        webhook_callbacks={"subject-topic": "https://webhook.example.com/akay"},
         webhook_api_key="test-secret",
         webhook_retry_delay_seconds=0.0,
     )
@@ -32,6 +32,7 @@ def make_request(**overrides) -> ConversionRequest:
         user_id=uuid4(),
         file_name="tema-1.pdf",
         source_blob_name="ctx/doc/tema-1.pdf",
+        callback="subject-topic",
     )
     values.update(overrides)
     return ConversionRequest(**values)
@@ -87,14 +88,21 @@ class FakeConverter:
 
 
 class FakeWebhook:
-    def __init__(self) -> None:
-        self.calls: list[tuple[dict, str]] = []
+    def __init__(self, callbacks: dict[str, str] | None = None) -> None:
+        self._callbacks = callbacks or {"subject-topic": "https://webhook.example.com/akay"}
+        self.calls: list[tuple[str, dict, str]] = []
         self.error = None
 
-    async def send(self, payload: dict, idempotency_key: str) -> None:
+    def is_configured(self, callback: str) -> bool:
+        return callback in self._callbacks
+
+    def resolve_url(self, callback: str) -> str | None:
+        return self._callbacks.get(callback)
+
+    async def send(self, callback: str, payload: dict, idempotency_key: str) -> None:
         if self.error:
             raise self.error
-        self.calls.append((payload, idempotency_key))
+        self.calls.append((callback, payload, idempotency_key))
 
     async def aclose(self) -> None:
         pass

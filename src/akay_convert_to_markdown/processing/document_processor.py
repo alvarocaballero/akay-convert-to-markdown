@@ -69,6 +69,7 @@ class DocumentProcessor:
             context_id=str(request.context_id),
             user_id=str(request.user_id),
             file_name=request.file_name,
+            callback=request.callback,
         )
         started = time.perf_counter()
         try:
@@ -140,6 +141,7 @@ class DocumentProcessor:
     async def _send_completed_webhook(self, request: ConversionRequest, log: logging.LoggerAdapter) -> None:
         payload = {
             "eventType": "document.conversion.completed",
+            "callback": request.callback,
             "documentId": str(request.document_id),
             "contextId": str(request.context_id),
             "userId": str(request.user_id),
@@ -149,7 +151,12 @@ class DocumentProcessor:
                 "blobName": self._output_blob_name(request),
             },
         }
-        await self._notify(payload, f"convert-to-markdown:{request.document_id}:completed", log)
+        await self._notify(
+            request.callback,
+            payload,
+            f"convert-to-markdown:{request.document_id}:completed",
+            log,
+        )
 
     async def _send_failed_webhook(
         self,
@@ -159,22 +166,34 @@ class DocumentProcessor:
     ) -> None:
         payload = {
             "eventType": "document.conversion.failed",
+            "callback": request.callback,
             "documentId": str(request.document_id),
             "contextId": str(request.context_id),
             "userId": str(request.user_id),
             "fileName": request.file_name,
             "error": {"code": exc.code, "message": exc.message},
         }
-        await self._notify(payload, f"convert-to-markdown:{request.document_id}:failed", log)
+        await self._notify(request.callback, payload, f"convert-to-markdown:{request.document_id}:failed", log)
 
     async def notify_invalid_message(self, identity: dict, log: logging.LoggerAdapter) -> None:
         """Send a ``document.conversion.failed`` webhook for an invalid message.
 
-        Raises :class:`WebhookError` (transient) when the webhook cannot be
-        delivered, so the consumer abandons the message.
+        Only sends when both the document identity and a configured callback are
+        recoverable; otherwise it logs and returns so the consumer settles the
+        poison message. Raises :class:`WebhookError` (transient) when the webhook
+        cannot be delivered, so the consumer abandons the message.
         """
+        callback = identity.get("callback")
+        if callback is None or not self._webhook.is_configured(callback):
+            log.error(
+                "webhook.callback_not_configured",
+                extra={"callback": callback, "reason": "cannot notify invalid message"},
+            )
+            return
+
         payload: dict = {
             "eventType": "document.conversion.failed",
+            "callback": callback,
             "documentId": identity["documentId"],
         }
         for field in ("contextId", "userId", "fileName"):
@@ -184,12 +203,18 @@ class DocumentProcessor:
             "code": "INVALID_MESSAGE",
             "message": "Message has missing or invalid required fields.",
         }
-        await self._notify(payload, f"convert-to-markdown:{identity['documentId']}:failed", log)
+        await self._notify(callback, payload, f"convert-to-markdown:{identity['documentId']}:failed", log)
 
-    async def _notify(self, payload: dict, idempotency_key: str, log: logging.LoggerAdapter) -> None:
+    async def _notify(
+        self,
+        callback: str,
+        payload: dict,
+        idempotency_key: str,
+        log: logging.LoggerAdapter,
+    ) -> None:
         started = time.perf_counter()
         try:
-            await self._webhook.send(payload, idempotency_key)
+            await self._webhook.send(callback, payload, idempotency_key)
         except WebhookError:
             log.error(
                 "webhook.failed",

@@ -13,6 +13,7 @@ _LOG_FIELDS = (
     "context_id",
     "user_id",
     "file_name",
+    "callback",
     "delivery_count",
     "duration_ms",
     "attempt",

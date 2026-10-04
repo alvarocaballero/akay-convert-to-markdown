@@ -20,5 +20,7 @@ async def test_processing_twice_is_deterministic(settings, fake_storage, fake_co
     blob_names = [upload[1] for upload in fake_storage.uploads]
     assert blob_names == [f"{request.context_id}/{request.document_id}/document.md"] * 2
 
-    idempotency_keys = [call[1] for call in fake_webhook.calls]
+    callbacks = [call[0] for call in fake_webhook.calls]
+    idempotency_keys = [call[2] for call in fake_webhook.calls]
+    assert callbacks == [request.callback] * 2
     assert idempotency_keys == [f"convert-to-markdown:{request.document_id}:completed"] * 2

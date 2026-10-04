@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from urllib.parse import urlparse
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_ALLOWED_WEBHOOK_URL_SCHEMES = frozenset({"http", "https"})
+
+
+def _is_valid_webhook_url(url: str) -> bool:
+    """Whether ``url`` is an absolute HTTP(S) URL with a host."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    return parsed.scheme in _ALLOWED_WEBHOOK_URL_SCHEMES and bool(parsed.netloc)
 
 
 class Settings(BaseSettings):
@@ -30,7 +44,7 @@ class Settings(BaseSettings):
     servicebus_max_lock_renewal_seconds: int = 900
 
     # Webhook --------------------------------------------------------------
-    webhook_url: str
+    webhook_callbacks: dict[str, str]
     webhook_api_key: str
     webhook_timeout_seconds: float = 10.0
     webhook_retry_count: int = 3
@@ -42,6 +56,25 @@ class Settings(BaseSettings):
 
     # Observability --------------------------------------------------------
     log_level: str = "INFO"
+
+    @field_validator("webhook_callbacks", mode="before")
+    @classmethod
+    def _parse_webhook_callbacks(cls, value):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"WEBHOOK_CALLBACKS is not valid JSON: {exc}") from exc
+        if not isinstance(value, dict):
+            raise ValueError("WEBHOOK_CALLBACKS must be a JSON object mapping callback names to URLs.")
+        for key, url in value.items():
+            if not isinstance(key, str) or not isinstance(url, str) or not key or not url:
+                raise ValueError("WEBHOOK_CALLBACKS keys and values must be non-empty strings.")
+            if not _is_valid_webhook_url(url):
+                raise ValueError(
+                    f"WEBHOOK_CALLBACKS URL for '{key}' must be an absolute http:// or https:// URL."
+                )
+        return value
 
     @property
     def max_document_size_bytes(self) -> int:

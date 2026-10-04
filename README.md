@@ -94,7 +94,7 @@ Do **not** grant Owner or Contributor.
 | `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` | yes | — | e.g. `<ns>.servicebus.windows.net` |
 | `SERVICEBUS_QUEUE_NAME` | yes | — | Queue name |
 | `SERVICEBUS_MAX_LOCK_RENEWAL_SECONDS` | no | `900` | Max lock renewal duration per message |
-| `WEBHOOK_URL` | yes | — | `Akay.Be` webhook endpoint |
+| `WEBHOOK_CALLBACKS` | yes | — | JSON mapping of callback id → webhook URL |
 | `WEBHOOK_API_KEY` | yes | — | Webhook secret (never logged) |
 | `WEBHOOK_TIMEOUT_SECONDS` | no | `10` | Per-attempt HTTP timeout |
 | `WEBHOOK_RETRY_COUNT` | no | `3` | Webhook attempts |
@@ -144,7 +144,8 @@ HTTP port is exposed.
   "contextId": "5af11f72-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
   "userId": "e0a01a4c-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
   "fileName": "tema-1.pdf",
-  "sourceBlobName": "5af11f72/.../47cd79ca/.../tema-1.pdf"
+  "sourceBlobName": "5af11f72/.../47cd79ca/.../tema-1.pdf",
+  "callback": "subject-topic"
 }
 ```
 
@@ -164,8 +165,11 @@ which contributes to idempotency.
 
 ### Completed
 
+The destination URL is resolved from the message's `callback` identifier via
+`WEBHOOK_CALLBACKS`.
+
 ```http
-POST {WEBHOOK_URL}
+POST {callback-resolved URL}
 X-Akay-Webhook-Key: <secret>
 Idempotency-Key: convert-to-markdown:{documentId}:completed
 ```
@@ -173,6 +177,7 @@ Idempotency-Key: convert-to-markdown:{documentId}:completed
 ```json
 {
   "eventType": "document.conversion.completed",
+  "callback": "subject-topic",
   "documentId": "...",
   "contextId": "...",
   "userId": "...",
@@ -193,6 +198,7 @@ Idempotency-Key: convert-to-markdown:{documentId}:failed
 ```json
 {
   "eventType": "document.conversion.failed",
+  "callback": "subject-topic",
   "documentId": "...",
   "contextId": "...",
   "userId": "...",
@@ -214,8 +220,8 @@ webhook; they may be written to application logs.
   `document.conversion.failed` webhook; complete the message only if the
   webhook returns 2xx.
 - **Transient errors** (Blob/Service Bus failure, HTTP timeout, webhook
-  408/429/5xx, network failure): abandon the message and let Service Bus
-  redeliver it.
+  408/429/5xx, network failure, unknown `callback`): abandon the message and let
+  Service Bus redeliver it.
 - The webhook has a small local retry policy (`WEBHOOK_RETRY_COUNT`,
   `WEBHOOK_RETRY_DELAY_SECONDS`) limited to transient conditions. Normal client
   errors (400/401/403/404) are not retried.

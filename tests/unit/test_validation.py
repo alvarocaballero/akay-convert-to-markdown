@@ -22,6 +22,7 @@ def _message(**overrides) -> str:
         "userId": str(uuid.uuid4()),
         "fileName": "tema-1.pdf",
         "sourceBlobName": "ctx/doc/tema-1.pdf",
+        "callback": "subject-topic",
     }
     data.update(overrides)
     return json.dumps(data)
@@ -43,6 +44,13 @@ def test_missing_document_id_is_invalid():
 def test_missing_source_blob_name_is_invalid():
     data = json.loads(_message())
     del data["sourceBlobName"]
+    with pytest.raises(InvalidMessageError):
+        parse_conversion_request(json.dumps(data))
+
+
+def test_missing_callback_is_invalid():
+    data = json.loads(_message())
+    del data["callback"]
     with pytest.raises(InvalidMessageError):
         parse_conversion_request(json.dumps(data))
 
@@ -79,6 +87,17 @@ def test_recover_identity_returns_present_fields():
     assert identity["contextId"] == context_id
     assert "userId" not in identity
     assert "fileName" not in identity
+    assert "callback" not in identity
+
+
+def test_recover_identity_recovers_callback():
+    document_id = str(uuid.uuid4())
+    raw = json.dumps({"documentId": document_id, "callback": "student-document"})
+
+    identity = recover_invalid_message_identity(raw)
+
+    assert identity is not None
+    assert identity["callback"] == "student-document"
 
 
 def test_recover_identity_none_without_document_id():

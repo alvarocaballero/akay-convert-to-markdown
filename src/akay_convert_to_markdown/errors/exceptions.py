@@ -56,6 +56,10 @@ class WebhookError(TransientError):
     """Webhook delivery failed; the message should be redelivered."""
 
 
+class CallbackNotConfiguredError(TransientError):
+    """The requested callback identifier is not present in configuration."""
+
+
 class BlobStorageError(TransientError):
     """Transient Blob Storage failure."""
 

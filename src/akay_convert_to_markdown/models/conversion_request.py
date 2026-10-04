@@ -31,6 +31,7 @@ class ConversionRequest(BaseModel):
     user_id: UUID = Field(alias="userId")
     file_name: str = Field(alias="fileName", min_length=1)
     source_blob_name: str = Field(alias="sourceBlobName", min_length=1)
+    callback: str = Field(alias="callback", min_length=1)
 
 
 def parse_conversion_request(raw: str | bytes) -> ConversionRequest:
@@ -97,7 +98,7 @@ def recover_invalid_message_identity(raw: str | bytes) -> dict | None:
         return None
 
     identity: dict = {"documentId": str(document_id)}
-    for field in ("contextId", "userId", "fileName"):
+    for field in ("contextId", "userId", "fileName", "callback"):
         value = data.get(field)
         if value is not None:
             identity[field] = value

@@ -87,6 +87,7 @@ class ServiceBusConsumer:
                 context_id=str(request.context_id),
                 user_id=str(request.user_id),
                 file_name=request.file_name,
+                callback=request.callback,
                 delivery_count=delivery_count,
             )
             request_log.info("document.received")
@@ -145,6 +146,7 @@ class ServiceBusConsumer:
         log = context_logger(
             self._logger,
             document_id=identity["documentId"],
+            callback=identity.get("callback"),
             delivery_count=delivery_count,
         )
         log.error(

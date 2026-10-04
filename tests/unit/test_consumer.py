@@ -6,10 +6,18 @@ import asyncio
 import json
 import uuid
 
-from akay_convert_to_markdown.errors.exceptions import BlobStorageError, WebhookError
+import httpx
+
+from akay_convert_to_markdown.errors.exceptions import (
+    BlobStorageError,
+    CallbackNotConfiguredError,
+    WebhookError,
+)
 from akay_convert_to_markdown.messaging.service_bus_consumer import ServiceBusConsumer
 from akay_convert_to_markdown.models.conversion_result import ProcessingResult
-from tests.helpers import make_logger
+from akay_convert_to_markdown.notifications.webhook_client import WebhookClient
+from akay_convert_to_markdown.processing.document_processor import DocumentProcessor
+from tests.helpers import FakeConverter, FakeStorage, make_logger, make_settings
 
 
 class StubProcessor:
@@ -89,6 +97,7 @@ def _valid_body() -> str:
             "userId": str(uuid.uuid4()),
             "fileName": "a.pdf",
             "sourceBlobName": "c/d/a.pdf",
+            "callback": "subject-topic",
         }
     )
 
@@ -101,6 +110,7 @@ def _invalid_identifiable_body() -> str:
             "contextId": str(uuid.uuid4()),
             "userId": str(uuid.uuid4()),
             "fileName": "a.pdf",
+            "callback": "subject-topic",
         }
     )
 
@@ -166,6 +176,7 @@ async def test_invalid_identifiable_message_sends_failed_webhook(settings):
 
     assert len(processor.invalid_notifications) == 1
     assert processor.invalid_notifications[0]["documentId"] == document_id
+    assert processor.invalid_notifications[0]["callback"] == "subject-topic"
     assert len(receiver.completed) == 1
     assert not receiver.abandoned
 
@@ -214,3 +225,50 @@ async def test_lock_renewer_is_closed_after_invalid_message(settings):
     await consumer._handle_message(FakeReceiver(), FakeMessage("{bad"))
 
     assert factory.renewers[0].closed is True
+
+
+async def test_unknown_callback_abandons(settings):
+    consumer = _make_consumer(
+        settings,
+        StubProcessor(error=CallbackNotConfiguredError("Callback 'x' is not configured.")),
+    )
+    receiver = FakeReceiver()
+
+    await consumer._handle_message(receiver, FakeMessage(_valid_body()))
+
+    assert len(receiver.abandoned) == 1
+    assert not receiver.completed
+
+
+async def test_unknown_callback_end_to_end_abandons_without_http(tmp_path):
+    http_calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        http_calls.append(request)
+        return httpx.Response(200)
+
+    settings = make_settings(
+        temp_directory=tmp_path / "akay",
+        webhook_callbacks={"subject-topic": "https://webhook.example.com/akay"},
+    )
+    webhook = WebhookClient(settings, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    processor = DocumentProcessor(settings, FakeStorage(), FakeConverter(), webhook, make_logger())
+    consumer = _make_consumer(settings, processor)
+    receiver = FakeReceiver()
+
+    body = json.dumps(
+        {
+            "documentId": str(uuid.uuid4()),
+            "contextId": str(uuid.uuid4()),
+            "userId": str(uuid.uuid4()),
+            "fileName": "a.pdf",
+            "sourceBlobName": "c/d/a.pdf",
+            "callback": "unknown-callback",
+        }
+    )
+
+    await consumer._handle_message(receiver, FakeMessage(body))
+
+    assert len(receiver.abandoned) == 1
+    assert not receiver.completed
+    assert http_calls == []
