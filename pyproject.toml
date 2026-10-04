@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "akay-convert-to-markdown"
+version = "0.1.0"
+description = "Service Bus driven worker that converts documents (PDF, DOCX, PPTX, HTML) to Markdown."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+dependencies = [
+    "markitdown[pdf,docx,pptx]==0.1.1",
+    "azure-identity==1.20.0",
+    "azure-servicebus==7.14.0",
+    "azure-storage-blob[aio]==12.24.1",
+    "httpx==0.27.2",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.0",
+    "pytest-cov==6.0.0",
+]
+
+[project.scripts]
+akay-convert-to-markdown = "akay_convert_to_markdown.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/akay_convert_to_markdown"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
