@@ -26,9 +26,9 @@ class ConversionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    document_id: UUID = Field(alias="documentId")
-    context_id: UUID = Field(alias="contextId")
-    user_id: UUID = Field(alias="userId")
+    document_id: int | UUID = Field(alias="documentId")
+    context_id: int | UUID = Field(alias="contextId")
+    user_id: int | UUID = Field(alias="userId")
     file_name: str = Field(alias="fileName", min_length=1)
     source_blob_name: str = Field(alias="sourceBlobName", min_length=1)
     callback: str = Field(alias="callback", min_length=1)
@@ -69,6 +69,26 @@ def validate_extension(file_name: str) -> str:
     return extension
 
 
+def _recover_id(value: object) -> int | str | None:
+    """Normalize a raw identity value to ``int`` or a canonical UUID string.
+
+    Returns ``None`` for anything that is not an integer or a valid UUID, so
+    only safe, opaque identifiers are propagated.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, str):
+        try:
+            return str(UUID(value))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def recover_invalid_message_identity(raw: str | bytes) -> dict | None:
     """Best-effort recovery of identity fields from an invalid message.
 
@@ -91,14 +111,16 @@ def recover_invalid_message_identity(raw: str | bytes) -> dict | None:
     if not isinstance(data, dict):
         return None
 
-    document_id = data.get("documentId")
-    try:
-        UUID(str(document_id))
-    except (ValueError, TypeError, AttributeError):
+    document_id = _recover_id(data.get("documentId"))
+    if document_id is None:
         return None
 
-    identity: dict = {"documentId": str(document_id)}
-    for field in ("contextId", "userId", "fileName", "callback"):
+    identity: dict = {"documentId": document_id}
+    for field in ("contextId", "userId"):
+        normalized = _recover_id(data.get(field))
+        if normalized is not None:
+            identity[field] = normalized
+    for field in ("fileName", "callback"):
         value = data.get(field)
         if value is not None:
             identity[field] = value

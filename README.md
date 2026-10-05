@@ -152,6 +152,11 @@ HTTP port is exposed.
 The source Blob path is taken from `sourceBlobName` and is never derived from
 `fileName`.
 
+`documentId`, `contextId` and `userId` each accept **either a JSON number
+(integer) or a UUID string**, independently. Integer ids are echoed back to the
+webhook as JSON numbers; UUID ids are echoed back as strings. Any other string
+value (including path-like values) is rejected as `INVALID_MESSAGE`.
+
 ## Output Blob structure
 
 ```text

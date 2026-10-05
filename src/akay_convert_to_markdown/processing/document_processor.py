@@ -12,6 +12,7 @@ import logging
 import shutil
 import time
 from pathlib import Path
+from uuid import UUID
 
 from akay_convert_to_markdown.config.settings import Settings
 from akay_convert_to_markdown.conversion.document_converter import DocumentConverter
@@ -29,6 +30,14 @@ from akay_convert_to_markdown.storage.blob_storage import BlobStorage
 
 def _elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
+
+
+def _to_wire(value: int | UUID) -> int | str:
+    """Serialize an identifier for the webhook payload, preserving its type.
+
+    Integer ids are emitted as JSON numbers; UUID-based ids as strings.
+    """
+    return value if isinstance(value, int) else str(value)
 
 
 def safe_source_filename(file_name: str) -> str:
@@ -142,9 +151,9 @@ class DocumentProcessor:
         payload = {
             "eventType": "document.conversion.completed",
             "callback": request.callback,
-            "documentId": str(request.document_id),
-            "contextId": str(request.context_id),
-            "userId": str(request.user_id),
+            "documentId": _to_wire(request.document_id),
+            "contextId": _to_wire(request.context_id),
+            "userId": _to_wire(request.user_id),
             "fileName": request.file_name,
             "output": {
                 "containerName": self._settings.destination_container_name,
@@ -167,9 +176,9 @@ class DocumentProcessor:
         payload = {
             "eventType": "document.conversion.failed",
             "callback": request.callback,
-            "documentId": str(request.document_id),
-            "contextId": str(request.context_id),
-            "userId": str(request.user_id),
+            "documentId": _to_wire(request.document_id),
+            "contextId": _to_wire(request.context_id),
+            "userId": _to_wire(request.user_id),
             "fileName": request.file_name,
             "error": {"code": exc.code, "message": exc.message},
         }

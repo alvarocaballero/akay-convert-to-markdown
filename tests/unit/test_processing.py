@@ -178,3 +178,40 @@ async def test_notify_invalid_message_unknown_callback_is_poison(settings, fake_
     await processor.notify_invalid_message(identity, make_logger())
 
     assert fake_webhook.calls == []
+
+
+async def test_completed_webhook_preserves_int_ids(settings, fake_storage, fake_converter, fake_webhook):
+    processor = _make_processor(settings, fake_storage, fake_converter, fake_webhook)
+    request = make_request(document_id=123, context_id=456, user_id=789)
+
+    await processor.process(request)
+
+    _, payload, _ = fake_webhook.calls[0]
+    assert payload["documentId"] == 123
+    assert payload["contextId"] == 456
+    assert payload["userId"] == 789
+    assert isinstance(payload["documentId"], int)
+
+
+async def test_completed_webhook_preserves_uuid_ids(settings, fake_storage, fake_converter, fake_webhook):
+    processor = _make_processor(settings, fake_storage, fake_converter, fake_webhook)
+    request = make_request()
+
+    await processor.process(request)
+
+    _, payload, _ = fake_webhook.calls[0]
+    assert payload["documentId"] == str(request.document_id)
+    assert payload["contextId"] == str(request.context_id)
+    assert isinstance(payload["documentId"], str)
+
+
+async def test_completed_webhook_preserves_mixed_ids(settings, fake_storage, fake_converter, fake_webhook):
+    processor = _make_processor(settings, fake_storage, fake_converter, fake_webhook)
+    request = make_request(document_id=123)
+
+    await processor.process(request)
+
+    _, payload, _ = fake_webhook.calls[0]
+    assert payload["documentId"] == 123
+    assert isinstance(payload["documentId"], int)
+    assert isinstance(payload["contextId"], str)

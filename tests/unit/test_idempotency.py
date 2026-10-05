@@ -24,3 +24,14 @@ async def test_processing_twice_is_deterministic(settings, fake_storage, fake_co
     idempotency_keys = [call[2] for call in fake_webhook.calls]
     assert callbacks == [request.callback] * 2
     assert idempotency_keys == [f"convert-to-markdown:{request.document_id}:completed"] * 2
+
+
+async def test_numeric_ids_keep_deterministic_paths_and_keys(settings, fake_storage, fake_converter, fake_webhook):
+    processor = DocumentProcessor(settings, fake_storage, fake_converter, fake_webhook, make_logger())
+    request = make_request(document_id=987, context_id=654)
+
+    await processor.process(request)
+
+    _, blob_name, _ = fake_storage.uploads[0]
+    assert blob_name == "654/987/document.md"
+    assert fake_webhook.calls[0][2] == "convert-to-markdown:987:completed"
