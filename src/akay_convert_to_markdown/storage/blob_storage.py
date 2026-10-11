@@ -45,6 +45,23 @@ class BlobStorage:
             raise BlobStorageError(f"Failed to read blob properties: {exc}") from exc
         return properties.size
 
+    async def blob_exists(self, container: str, blob_name: str) -> bool:
+        """Whether a blob exists (used for idempotent reprocessing).
+
+        A 404 simply means "not yet produced"; any other failure is treated as
+        transient infrastructure (:class:`BlobStorageError`).
+        """
+        try:
+            blob = self._client.get_blob_client(container, blob_name)
+            await blob.get_blob_properties()
+        except ResourceNotFoundError:
+            return False
+        except AzureError as exc:
+            raise BlobStorageError(f"Failed to check blob existence: {exc}") from exc
+        except Exception as exc:
+            raise BlobStorageError(f"Failed to check blob existence: {exc}") from exc
+        return True
+
     async def download_to_file(self, container: str, blob_name: str, destination: Path) -> None:
         """Stream a blob to a local file."""
         try:

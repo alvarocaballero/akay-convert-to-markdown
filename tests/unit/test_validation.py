@@ -92,9 +92,17 @@ def test_unsupported_extension_rejected():
         validate_extension("tema-1.xyz")
 
 
-@pytest.mark.parametrize("name", ["a.pdf", "a.docx", "a.pptx", "a.html", "a.htm", "a.PDF"])
+@pytest.mark.parametrize("name", ["a.pdf", "a.docx", "a.pptx", "a.html", "a.htm", "a.txt", "a.md", "a.PDF", "a.TXT", "a.MD"])
 def test_supported_extensions_accepted(name):
-    assert validate_extension(name) in {".pdf", ".docx", ".pptx", ".html", ".htm"}
+    assert validate_extension(name) in {".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md"}
+
+
+def test_txt_is_supported():
+    assert validate_extension("notes.txt") == ".txt"
+
+
+def test_md_is_supported():
+    assert validate_extension("notes.md") == ".md"
 
 
 def test_recover_identity_returns_present_fields():

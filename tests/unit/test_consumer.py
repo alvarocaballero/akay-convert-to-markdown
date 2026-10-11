@@ -272,3 +272,32 @@ async def test_unknown_callback_end_to_end_abandons_without_http(tmp_path):
     assert len(receiver.abandoned) == 1
     assert not receiver.completed
     assert http_calls == []
+
+
+async def test_concurrent_processing_is_bounded_by_max_concurrent_jobs():
+    settings = make_settings(max_concurrent_jobs=1)
+    active = 0
+    max_active = 0
+
+    class TrackingProcessor:
+        async def process(self, request):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.05)
+            active -= 1
+            return ProcessingResult.COMPLETED
+
+        async def notify_invalid_message(self, identity, log):
+            pass
+
+    consumer = _make_consumer(settings, TrackingProcessor())
+    receiver = FakeReceiver()
+
+    await asyncio.gather(
+        consumer._handle_message(receiver, FakeMessage(_valid_body())),
+        consumer._handle_message(receiver, FakeMessage(_valid_body())),
+        consumer._handle_message(receiver, FakeMessage(_valid_body())),
+    )
+
+    assert max_active == 1

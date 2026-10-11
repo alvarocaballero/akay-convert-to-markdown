@@ -1,52 +1,68 @@
 # Akay.ConvertToMarkdown
 
-A small Python worker that converts documents (PDF, DOCX, PPTX, HTML) to
-Markdown. It runs as an Azure Container App **without public ingress** and is
-driven entirely by Azure Service Bus.
+A small Python worker that normalizes content to Markdown. It runs as an Azure
+Container App **without public ingress** and is driven entirely by Azure
+Service Bus.
+
+It handles:
+
+- **Documents** — PDF, DOCX, PPTX, HTML, TXT, MD via [Microsoft MarkItDown](https://github.com/microsoft/markitdown).
+- **Audio** — MP3, WAV, AAC, M4A, OGG/OPUS, FLAC via Azure AI Speech Fast Transcription.
+- **Video** — MP4, MOV, MKV, WebM, AVI via FFmpeg audio extraction + Fast Transcription.
 
 ## Purpose
 
 The worker performs a single, well-scoped job:
 
-1. Receives a document conversion request from Azure Service Bus.
-2. Downloads the source document from Azure Blob Storage.
-3. Converts it to Markdown using [Microsoft MarkItDown](https://github.com/microsoft/markitdown).
-4. Uploads the resulting Markdown to a separate Blob Storage container.
-5. Notifies through an HTTP webhook.
-6. Completes the Service Bus message only when processing **and** the
+1. Receives a conversion request from Azure Service Bus.
+2. Detects the content type (document, audio or video).
+3. Obtains the source content from Blob Storage.
+4. Normalizes it to Markdown using the matching strategy.
+5. Uploads the resulting Markdown to a Blob Storage container.
+6. Notifies through a single HTTP webhook, regardless of content type.
+7. Completes the Service Bus message only when processing **and** the
    corresponding webhook notification have succeeded.
 
-The worker has **no knowledge** of domain entities. `contextId` is treated as opaque metadata.
+The worker has **no knowledge** of domain entities. `contextId` and
+`documentId` are treated as opaque metadata.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     SB[Azure Service Bus\nqueue] -- PeekLock --> C[ServiceBusConsumer]
-    C -- validate --> P[DocumentProcessor]
-    P --> SRC[(Blob Storage\nsource container)]
-    P --> CV[DocumentConverter\nMarkItDown]
-    P --> DST[(Blob Storage\ndestination container)]
+    C -- detect type --> P[DocumentProcessor]
+    P --> DOC[Document strategy\nMarkItDown]
+    P --> AUD[Audio strategy\nFast Transcription]
+    P --> VID[Video strategy\nFFmpeg + Fast Transcription]
+    DOC --> DST[(Blob Storage\nMarkdown)]
+    AUD --> DST
+    VID --> DST
     P --> W[WebhookClient]
     W -- HTTP POST --> BE[Client API]
     C -- complete / abandon --> SB
 ```
 
-- **ServiceBusConsumer** — receives, deserializes, dispatches and settles messages.
+- **ServiceBusConsumer** — receives, deserializes, dispatches and settles messages
+  (bounded concurrency).
 - **DocumentProcessor** — orchestrates one request; knows nothing about Service Bus settlement.
+- **processors** (`audio_processor`, `video_processor`) — per-content-type strategies.
+- **services** (`fast_transcription_service`, `ffmpeg_service`, `markdown_builder`) — external integrations.
 - **BlobStorage** — streaming download/upload abstraction.
-- **DocumentConverter** — abstraction around MarkItDown (`MarkItDownDocumentConverter`).
+- **DocumentConverter** — MarkItDown abstraction (`MarkItDownDocumentConverter`).
 - **WebhookClient** — HTTP notifications with a small local retry policy.
 
-## Supported file types
+## Supported content
 
-- `.pdf`
-- `.docx`
-- `.pptx`
-- `.html`
-- `.htm`
+| Type | Sources |
+| --- | --- |
+| Document | `.pdf`, `.docx`, `.pptx`, `.html`, `.htm`, `.txt`, `.md` |
+| Audio | `.mp3`, `.wav`, `.aac`, `.m4a`, `.ogg`, `.opus`, `.flac` |
+| Video | `.mp4`, `.mov`, `.mkv`, `.webm`, `.avi`, `.m4v`, `.mpg`, `.mpeg`, `.wmv` |
 
-Any other extension is rejected as `UNSUPPORTED_DOCUMENT_TYPE`.
+`.webm` is treated as video (the FFmpeg path handles audio-only WebM too).
+Unknown extensions still fall through to the document path and are rejected as
+`UNSUPPORTED_DOCUMENT_TYPE`.
 
 ## Local setup
 
@@ -60,6 +76,8 @@ python -m venv .venv
 pip install -e ".[test]"
 ```
 
+Media processing requires `ffmpeg` and `ffprobe` on the PATH.
+
 ## Azure authentication
 
 The worker uses Azure Identity with the **async**
@@ -70,6 +88,8 @@ strings.
   client ID via `AZURE_CLIENT_ID`.
 - Locally, `DefaultAzureCredential` falls back to Azure CLI developer
   credentials (`az login`).
+- Azure Speech uses its resource key (`SPEECH_RESOURCE_KEY`) via the
+  `Ocp-Apim-Subscription-Key` header.
 
 ## Required RBAC roles
 
@@ -99,9 +119,23 @@ Do **not** grant Owner or Contributor.
 | `WEBHOOK_TIMEOUT_SECONDS` | no | `10` | Per-attempt HTTP timeout |
 | `WEBHOOK_RETRY_COUNT` | no | `3` | Webhook attempts |
 | `WEBHOOK_RETRY_DELAY_SECONDS` | no | `2` | Delay between attempts |
-| `MAX_DOCUMENT_SIZE_MB` | no | `100` | Max source document size |
+| `MAX_INPUT_SIZE_MB` | no | `100` | Max source size |
+| `MAX_MEDIA_DURATION_MINUTES` | no | `240` | Max media duration |
+| `PROCESS_TIMEOUT_MINUTES` | no | `60` | Whole-processing timeout |
+| `MAX_CONCURRENT_JOBS` | no | `2` | Concurrent message processing |
+| `SPEECH_RESOURCE_KEY` | yes* | — | Azure Speech resource key (secret) |
+| `SPEECH_ENDPOINT` | yes* | — | e.g. `https://<resource>.cognitiveservices.azure.com` |
+| `SPEECH_API_VERSION` | no | `2025-10-15` | Fast Transcription API version |
+| `SPEECH_LOCALES` | no | *(auto)* | Comma-separated locales, e.g. `es-ES` |
+| `SPEECH_TIMEOUT_SECONDS` | no | `600` | Transcription HTTP timeout |
+| `SPEECH_RETRY_COUNT` | no | `2` | Transient transcription retries |
+| `SPEECH_RETRY_DELAY_SECONDS` | no | `1` | Delay between transcription retries |
+| `FFMPEG_TIMEOUT_SECONDS` | no | `300` | FFmpeg/FFprobe timeout |
+| `FFMPEG_MAX_LOG_BYTES` | no | `8192` | Bounded subprocess log size |
 | `TEMP_DIRECTORY` | no | `/tmp/akay` | Ephemeral conversion data |
 | `LOG_LEVEL` | no | `INFO` | Logging level |
+
+\* Required only when processing audio/video.
 
 The application **fails fast at startup** if a mandatory variable is absent.
 Secrets have no default values.
@@ -121,11 +155,14 @@ pytest                     # unit tests
 pytest --cov=akay_convert_to_markdown
 ```
 
-Azure integration tests are disabled by default:
+Integration tests are disabled by default:
 
 ```bash
 RUN_AZURE_INTEGRATION_TESTS=true pytest tests/integration
 ```
+
+Media integration tests additionally require `ffmpeg`/`ffprobe` on the PATH and
+`SPEECH_RESOURCE_KEY` + `SPEECH_ENDPOINT` set.
 
 ## Building the Docker image
 
@@ -133,8 +170,9 @@ RUN_AZURE_INTEGRATION_TESTS=true pytest tests/integration
 docker build -t akay-convert-to-markdown .
 ```
 
-The image runs as a non-root user and uses `/tmp/akay` for temporary data. No
-HTTP port is exposed.
+The image installs `ffmpeg`/`ffprobe` (apt), validates them at build time, runs
+as a non-root user and uses `/tmp/akay` for temporary data. No HTTP port is
+exposed.
 
 ## Expected Service Bus message
 
@@ -148,6 +186,11 @@ HTTP port is exposed.
   "callback": "subject-topic"
 }
 ```
+
+`sourceBlobName` is required and locates the source content. An optional
+`contentType` (`document` | `audio` | `video`) overrides automatic detection,
+which otherwise resolves by file extension (there is no MIME type in the
+message, and content is never inferred from external URLs).
 
 The source Blob path is taken from `sourceBlobName` and is never derived from
 `fileName`.
@@ -163,10 +206,13 @@ value (including path-like values) is rejected as `INVALID_MESSAGE`.
 {contextId}/{documentId}/document.md
 ```
 
-The same destination Blob is overwritten when a `documentId` is reprocessed,
-which contributes to idempotency.
+The same destination Blob is overwritten when a `documentId` is reprocessed. If
+the destination Markdown already exists, processing is skipped and the
+completed webhook is re-sent (idempotent at-least-once delivery).
 
 ## Webhook contracts
+
+The webhook contract is identical for every content type.
 
 ### Completed
 
@@ -209,27 +255,31 @@ Idempotency-Key: convert-to-markdown:{documentId}:failed
   "userId": "...",
   "fileName": "tema-1.pdf",
   "error": {
-    "code": "UNSUPPORTED_DOCUMENT_TYPE",
-    "message": "Document type '.xyz' is not supported."
+    "code": "SPEECH_TRANSCRIPTION_FAILED",
+    "message": "Azure Speech returned status 500."
   }
 }
 ```
 
-Stack traces and internal exception details are never exposed through the
-webhook; they may be written to application logs.
+Stack traces and subprocess stdout/stderr are never exposed through the
+webhook; they may be written to application logs (bounded).
 
 ## Error / retry semantics
 
-- **Permanent errors** (invalid message, unsupported extension, oversized
-  document, missing source blob, corrupt document): send the
-  `document.conversion.failed` webhook; complete the message only if the
-  webhook returns 2xx.
-- **Transient errors** (Blob/Service Bus failure, HTTP timeout, webhook
-  408/429/5xx, network failure, unknown `callback`): abandon the message and let
-  Service Bus redeliver it.
-- The webhook has a small local retry policy (`WEBHOOK_RETRY_COUNT`,
-  `WEBHOOK_RETRY_DELAY_SECONDS`) limited to transient conditions. Normal client
-  errors (400/401/403/404) are not retried.
+- **Permanent errors** send the `document.conversion.failed` webhook; the message
+  is completed only if the webhook returns 2xx. Codes include:
+  `UNSUPPORTED_DOCUMENT_TYPE`, `UNSUPPORTED_CONTENT_TYPE`, `INVALID_MEDIA`,
+  `NO_AUDIO_TRACK`, `FFMPEG_FAILED`,
+  `SPEECH_TRANSCRIPTION_FAILED`, `PROCESSING_TIMEOUT`, `MEDIA_TOO_LONG`,
+  `DOCUMENT_TOO_LARGE`, `SOURCE_BLOB_NOT_FOUND`, `DOCUMENT_CONVERSION_FAILED`,
+  `INVALID_MESSAGE`.
+- **Transient errors** abandon the message and let Service Bus redeliver it.
+  This covers Blob/Service Bus failure, HTTP timeouts, webhook 408/429/5xx,
+  network failure, unknown `callback`, and Azure Speech throttling
+  (`SPEECH_RATE_LIMITED`).
+- The webhook and the Speech client have small local retry policies
+  (`WEBHOOK_RETRY_COUNT` / `SPEECH_RETRY_COUNT`) limited to transient conditions.
+  Normal client errors (400/401/403/404) are not retried.
 - Redelivery and dead-lettering are controlled by the queue's
   `MaxDeliveryCount`, not by application code.
 - Delivery is **at-least-once**; the pipeline is idempotent.
@@ -237,7 +287,8 @@ webhook; they may be written to application logs.
 ## Logging
 
 Structured JSON logs allow tracing a conversion by `documentId`. The webhook
-API key, Azure credentials, and document/Markdown contents are never logged.
+API key, Azure credentials, speech key, and document/transcription contents are
+never logged. Subprocess stdout/stderr are logged bounded (`*_MAX_LOG_BYTES`).
 
 ## Explicit non-goals
 

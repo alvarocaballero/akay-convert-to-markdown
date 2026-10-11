@@ -1,14 +1,15 @@
 """Service Bus consumer (PeekLock).
 
-The consumer is responsible for receiving, deserializing and dispatching one
-message at a time to :class:`DocumentProcessor`, then settling the message:
+The consumer is responsible for receiving, deserializing and dispatching
+messages to :class:`DocumentProcessor`, then settling each message:
 
 * completed outcome  -> ``complete_message``
 * permanent failure   -> ``complete_message`` (after the failed webhook 2xx)
 * transient failure   -> ``abandon_message``
 
-Azure Service Bus controls redelivery and dead-lettering through the queue's
-``MaxDeliveryCount``; no application-level retry loop exists here.
+Up to ``MAX_CONCURRENT_JOBS`` messages are processed concurrently, bounded by a
+semaphore. Azure Service Bus controls redelivery and dead-lettering through the
+queue's ``MaxDeliveryCount``; no application-level retry loop exists here.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ class ServiceBusConsumer:
         self._logger = logger
         self._stop_event = stop_event
         self._lock_renewer_factory = lock_renewer_factory or AutoLockRenewer
+        self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 
     async def run(self) -> None:
         client = ServiceBusClient(
@@ -56,73 +58,86 @@ class ServiceBusConsumer:
         async with client:
             receiver = client.get_queue_receiver(
                 self._settings.servicebus_queue_name,
-                prefetch_count=1,
+                prefetch_count=self._settings.max_concurrent_jobs,
             )
             async with receiver:
                 await self._receive_loop(receiver)
 
     async def _receive_loop(self, receiver: ServiceBusReceiver) -> None:
         while not self._stop_event.is_set():
-            messages = await receiver.receive_messages(max_message_count=1, max_wait_time=5)
+            messages = await receiver.receive_messages(
+                max_message_count=self._settings.max_concurrent_jobs,
+                max_wait_time=5,
+            )
             if not messages:
                 continue
-            for message in messages:
-                await self._handle_message(receiver, message)
+            await asyncio.gather(
+                *(asyncio.create_task(self._handle_message(receiver, message)) for message in messages)
+            )
 
     async def _handle_message(self, receiver: ServiceBusReceiver, message: ServiceBusReceivedMessage) -> None:
         renewer = self._lock_renewer_factory()
         try:
-            delivery_count = message.delivery_count
-            raw: str | bytes = message.body
-
-            try:
-                request = parse_conversion_request(raw)
-            except InvalidMessageError as exc:
-                await self._handle_invalid_message(receiver, message, raw, exc, delivery_count)
-                return
-
-            request_log = context_logger(
-                self._logger,
-                document_id=str(request.document_id),
-                context_id=str(request.context_id),
-                user_id=str(request.user_id),
-                file_name=request.file_name,
-                callback=request.callback,
-                delivery_count=delivery_count,
-            )
-            request_log.info("document.received")
-
-            renewer.register(
-                receiver,
-                message,
-                max_lock_renewal_duration=self._settings.servicebus_max_lock_renewal_seconds,
-            )
-
-            try:
-                await self._processor.process(request)
-            except TransientError as exc:
-                request_log.error(
-                    "document.processing.failed",
-                    extra={"error_code": "TRANSIENT", "reason": str(exc)},
-                    exc_info=True,
-                )
-                await receiver.abandon_message(message)
-                return
-            except Exception as exc:
-                # Unexpected exceptions must never terminate the receive loop.
-                # asyncio.CancelledError inherits from BaseException (not
-                # Exception), so shutdown cancellation is not swallowed here.
-                request_log.error(
-                    "document.processing.failed",
-                    extra={"error_code": "UNEXPECTED", "reason": str(exc)},
-                    exc_info=True,
-                )
-                await receiver.abandon_message(message)
-                return
-
-            await receiver.complete_message(message)
+            async with self._semaphore:
+                await self._process_message(receiver, message, renewer)
         finally:
             await renewer.close()
+
+    async def _process_message(
+        self,
+        receiver: ServiceBusReceiver,
+        message: ServiceBusReceivedMessage,
+        renewer,
+    ) -> None:
+        delivery_count = message.delivery_count
+        raw: str | bytes = message.body
+
+        try:
+            request = parse_conversion_request(raw)
+        except InvalidMessageError as exc:
+            await self._handle_invalid_message(receiver, message, raw, exc, delivery_count)
+            return
+
+        request_log = context_logger(
+            self._logger,
+            document_id=str(request.document_id),
+            context_id=str(request.context_id),
+            user_id=str(request.user_id),
+            file_name=request.file_name,
+            callback=request.callback,
+            delivery_count=delivery_count,
+        )
+        request_log.info("document.received")
+
+        renewer.register(
+            receiver,
+            message,
+            max_lock_renewal_duration=self._settings.servicebus_max_lock_renewal_seconds,
+        )
+
+        try:
+            await self._processor.process(request)
+        except TransientError as exc:
+            request_log.error(
+                "document.processing.failed",
+                extra={"error_code": "TRANSIENT", "reason": str(exc)},
+                exc_info=True,
+            )
+            await receiver.abandon_message(message)
+            return
+        except Exception as exc:
+            # Unexpected exceptions must never terminate the receive loop.
+            # asyncio.CancelledError inherits from BaseException (not
+            # Exception), so shutdown cancellation is not swallowed here.
+            request_log.error(
+                "document.processing.failed",
+                extra={"error_code": "UNEXPECTED", "reason": str(exc)},
+                exc_info=True,
+            )
+            await receiver.abandon_message(message)
+            return
+
+        await receiver.complete_message(message)
 
     async def _handle_invalid_message(
         self,

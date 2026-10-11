@@ -12,12 +12,22 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# System media tools (FFmpeg/FFprobe) used for audio extraction and probing.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install runtime dependencies first so this layer is cached until
 # pyproject.toml changes; source-code edits only invalidate the app layer below.
 COPY pyproject.toml README.md ./
 RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" > /tmp/requirements.txt \
     && pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
+
+# Validate required external tools at build time (versions are surfaced so the
+# expected toolchain is explicit in the build log).
+RUN ffmpeg -version \
+    && ffprobe -version
 
 # Install the application itself (dependencies are already cached).
 COPY src ./src

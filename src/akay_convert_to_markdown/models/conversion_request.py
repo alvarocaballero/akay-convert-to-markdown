@@ -18,11 +18,17 @@ from akay_convert_to_markdown.errors.exceptions import (
     UnsupportedDocumentTypeError,
 )
 
-SUPPORTED_EXTENSIONS = frozenset({".pdf", ".docx", ".pptx", ".html", ".htm"})
+SUPPORTED_EXTENSIONS = frozenset(
+    {".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md"}
+)
 
 
 class ConversionRequest(BaseModel):
-    """A validated document conversion request."""
+    """A validated content conversion request.
+
+    Content is located by ``sourceBlobName``. All content types (document,
+    audio and video) are downloaded from Blob Storage.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
@@ -31,6 +37,7 @@ class ConversionRequest(BaseModel):
     user_id: int | UUID = Field(alias="userId")
     file_name: str = Field(alias="fileName", min_length=1)
     source_blob_name: str = Field(alias="sourceBlobName", min_length=1)
+    content_type: str | None = Field(default=None, alias="contentType", min_length=1)
     callback: str = Field(alias="callback", min_length=1)
 
 

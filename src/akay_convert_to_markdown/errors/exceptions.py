@@ -21,9 +21,12 @@ class PermanentError(AkayConvertError):
 
     code = "PROCESSING_FAILED"
 
-    def __init__(self, message: str, *, code: str | None = None) -> None:
+    def __init__(self, message: str, *, code: str | None = None, detail: str | None = None) -> None:
         super().__init__(message)
         self.message = message
+        # ``detail`` carries internal diagnostics (e.g. bounded subprocess
+        # stderr) that are logged but never sent through the webhook.
+        self.detail = detail
         if code is not None:
             self.code = code
 
@@ -40,8 +43,18 @@ class UnsupportedDocumentTypeError(PermanentError):
     code = "UNSUPPORTED_DOCUMENT_TYPE"
 
 
+class UnsupportedContentTypeError(PermanentError):
+    code = "UNSUPPORTED_CONTENT_TYPE"
+
+
 class DocumentTooLargeError(PermanentError):
     code = "DOCUMENT_TOO_LARGE"
+
+
+class MediaTooLongError(PermanentError):
+    """The media exceeds the configured maximum duration."""
+
+    code = "MEDIA_TOO_LONG"
 
 
 class SourceBlobNotFoundError(PermanentError):
@@ -50,6 +63,48 @@ class SourceBlobNotFoundError(PermanentError):
 
 class DocumentConversionError(PermanentError):
     code = "DOCUMENT_CONVERSION_FAILED"
+
+
+class InvalidMediaError(PermanentError):
+    """The media file is corrupt or cannot be processed."""
+
+    code = "INVALID_MEDIA"
+
+
+class NoAudioTrackError(PermanentError):
+    """The video contains no audio track to transcribe."""
+
+    code = "NO_AUDIO_TRACK"
+
+
+class FfmpegError(PermanentError):
+    """FFmpeg/FFprobe failed to process the media."""
+
+    code = "FFMPEG_FAILED"
+
+
+class SpeechTranscriptionError(PermanentError):
+    """Azure Fast Transcription failed permanently."""
+
+    code = "SPEECH_TRANSCRIPTION_FAILED"
+
+
+class ProcessingTimeoutError(PermanentError):
+    """The whole processing exceeded its configured time budget."""
+
+    code = "PROCESSING_TIMEOUT"
+
+
+class SpeechRateLimitedError(TransientError):
+    """Azure Fast Transcription is rate limiting; retry later."""
+
+    code = "SPEECH_RATE_LIMITED"
+
+
+class ProcessingCancelledError(TransientError):
+    """Processing was cancelled before completion."""
+
+    code = "CANCELLED"
 
 
 class WebhookError(TransientError):

@@ -51,11 +51,44 @@ class Settings(BaseSettings):
     webhook_retry_delay_seconds: float = 2.0
 
     # Processing -----------------------------------------------------------
-    max_document_size_mb: int = 100
+    max_input_size_mb: int = 100
+    max_media_duration_minutes: int = 240
+    process_timeout_minutes: int = 60
+    max_concurrent_jobs: int = 2
     temp_directory: Path = Path("/tmp/akay")
+
+    # Azure Speech (Fast Transcription) ------------------------------------
+    speech_resource_key: str | None = None
+    speech_endpoint: str | None = None
+    speech_api_version: str = "2025-10-15"
+    speech_locales: list[str] = []
+    speech_timeout_seconds: float = 600.0
+    speech_retry_count: int = 2
+    speech_retry_delay_seconds: float = 1.0
+
+    # FFmpeg / FFprobe ------------------------------------------------------
+    ffmpeg_timeout_seconds: float = 300.0
+    ffmpeg_max_log_bytes: int = 8192
 
     # Observability --------------------------------------------------------
     log_level: str = "INFO"
+
+    @field_validator("speech_locales", mode="before")
+    @classmethod
+    def _parse_speech_locales(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return []
+            if value.startswith("["):
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
     @field_validator("webhook_callbacks", mode="before")
     @classmethod
@@ -77,5 +110,13 @@ class Settings(BaseSettings):
         return value
 
     @property
-    def max_document_size_bytes(self) -> int:
-        return self.max_document_size_mb * 1024 * 1024
+    def max_input_size_bytes(self) -> int:
+        return self.max_input_size_mb * 1024 * 1024
+
+    @property
+    def process_timeout_seconds(self) -> float:
+        return self.process_timeout_minutes * 60.0
+
+    @property
+    def max_media_duration_seconds(self) -> float:
+        return self.max_media_duration_minutes * 60.0

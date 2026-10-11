@@ -46,6 +46,7 @@ class FakeStorage:
     def __init__(self) -> None:
         self.blob_sizes: dict[str, int] = {}
         self.missing: set[str] = set()
+        self.existing_blobs: dict[str, bool] = {}
         self.downloads: list[tuple[str, str, object]] = []
         self.uploads: list[tuple[str, str, object]] = []
         self.download_error = None
@@ -55,6 +56,9 @@ class FakeStorage:
         if blob_name in self.missing:
             raise SourceBlobNotFoundError(f"blob {blob_name} not found")
         return self.blob_sizes.get(blob_name, 12345)
+
+    async def blob_exists(self, container: str, blob_name: str) -> bool:
+        return self.existing_blobs.get(blob_name, False)
 
     async def download_to_file(self, container: str, blob_name: str, destination) -> None:
         if self.download_error:

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "akay-convert-to-markdown"
 version = "1.0.1"
-description = "Service Bus driven worker that converts documents (PDF, DOCX, PPTX, HTML) to Markdown."
+description = "Service Bus driven worker that converts content (documents, audio, video) to Markdown."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "Proprietary" }

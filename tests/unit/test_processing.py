@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -83,7 +85,7 @@ async def test_source_missing_sends_failed_event(settings, fake_storage, fake_co
 
 async def test_maximum_size_exceeded(tmp_path, fake_converter, fake_webhook):
     storage = FakeStorage()
-    settings = make_settings(temp_directory=tmp_path, max_document_size_mb=1)
+    settings = make_settings(temp_directory=tmp_path, max_input_size_mb=1)
     request = make_request()
     storage.blob_sizes[request.source_blob_name] = 2 * 1024 * 1024
     processor = _make_processor(settings, storage, fake_converter, fake_webhook)
@@ -139,7 +141,8 @@ async def test_temp_files_removed_after_success(tmp_path, fake_converter, fake_w
 
     await processor.process(request)
 
-    assert not (settings.temp_directory / str(request.document_id)).exists()
+    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    assert not base.exists()
 
 
 async def test_temp_files_removed_after_failure(tmp_path, fake_converter, fake_webhook):
@@ -151,7 +154,51 @@ async def test_temp_files_removed_after_failure(tmp_path, fake_converter, fake_w
 
     await processor.process(request)
 
-    assert not (settings.temp_directory / str(request.document_id)).exists()
+    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    assert not base.exists()
+
+
+async def test_temp_files_removed_after_timeout(tmp_path):
+    storage = FakeStorage()
+
+    class HangingConverter:
+        async def convert(self, source_path):
+            await asyncio.sleep(3600)
+            return "# md"
+
+    settings = make_settings(temp_directory=tmp_path / "akay", process_timeout_minutes=0)
+    processor = _make_processor(settings, storage, HangingConverter(), FakeWebhook())
+    request = make_request()
+
+    result = await processor.process(request)
+
+    assert result is ProcessingResult.FAILED_PERMANENT
+    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    assert not base.exists()
+
+
+async def test_temp_files_removed_on_cancellation(tmp_path):
+    storage = FakeStorage()
+    started = asyncio.Event()
+
+    class HangingConverter:
+        async def convert(self, source_path):
+            started.set()
+            await asyncio.sleep(3600)
+            return "# md"
+
+    settings = make_settings(temp_directory=tmp_path / "akay")
+    processor = _make_processor(settings, storage, HangingConverter(), FakeWebhook())
+    request = make_request()
+
+    task = asyncio.create_task(processor.process(request))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    assert not base.exists()
 
 
 async def test_notify_invalid_message_payload(settings, fake_storage, fake_converter, fake_webhook):

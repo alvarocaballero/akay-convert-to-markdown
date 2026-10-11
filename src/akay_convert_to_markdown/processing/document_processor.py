@@ -1,30 +1,45 @@
-"""Orchestrates a single document conversion request.
+"""Orchestrates a single content conversion request.
 
 ``DocumentProcessor`` knows nothing about Service Bus message settlement. It
 either returns a :class:`ProcessingResult` (complete) or raises a
 :class:`TransientError` (abandon). The Service Bus consumer maps those outcomes
 to the correct settlement call.
+
+It detects the content type and dispatches to the matching strategy:
+
+* ``Document`` -> MarkItDown;
+* ``Audio``    -> Azure Fast Transcription;
+* ``Video``    -> FFmpeg audio extraction + Fast Transcription.
+
+Downloading, size/duration limits, timeout, temporary-file cleanup, Blob
+upload and webhook delivery are shared across every strategy.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 import time
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from akay_convert_to_markdown.config.settings import Settings
 from akay_convert_to_markdown.conversion.document_converter import DocumentConverter
 from akay_convert_to_markdown.errors.exceptions import (
     DocumentTooLargeError,
     PermanentError,
+    ProcessingTimeoutError,
+    UnsupportedContentTypeError,
     WebhookError,
 )
 from akay_convert_to_markdown.logging import context_logger
+from akay_convert_to_markdown.models.content_type import ContentType, detect_content_type
 from akay_convert_to_markdown.models.conversion_request import ConversionRequest, validate_extension
 from akay_convert_to_markdown.models.conversion_result import ProcessingResult
 from akay_convert_to_markdown.notifications.webhook_client import WebhookClient
+from akay_convert_to_markdown.processing.audio_processor import AudioProcessor
+from akay_convert_to_markdown.processing.video_processor import VideoProcessor
 from akay_convert_to_markdown.storage.blob_storage import BlobStorage
 
 
@@ -55,7 +70,7 @@ def safe_source_filename(file_name: str) -> str:
 
 
 class DocumentProcessor:
-    """Coordinates validate -> download -> convert -> upload -> webhook."""
+    """Coordinates detect -> download -> convert -> upload -> webhook."""
 
     def __init__(
         self,
@@ -64,12 +79,17 @@ class DocumentProcessor:
         converter: DocumentConverter,
         webhook: WebhookClient,
         logger: logging.Logger,
+        *,
+        audio_processor: AudioProcessor | None = None,
+        video_processor: VideoProcessor | None = None,
     ) -> None:
         self._settings = settings
         self._storage = storage
         self._converter = converter
         self._webhook = webhook
         self._logger = logger
+        self._audio_processor = audio_processor
+        self._video_processor = video_processor
 
     async def process(self, request: ConversionRequest) -> ProcessingResult:
         log = context_logger(
@@ -81,37 +101,146 @@ class DocumentProcessor:
             callback=request.callback,
         )
         started = time.perf_counter()
+        execution_base, execution_dir = self._execution_directories(request)
         try:
-            self._validate_extension(request)
+            content_type = detect_content_type(
+                file_name=request.file_name,
+                explicit_type=request.content_type,
+            )
+            self._validate_input(request, content_type)
+
+            if await self._already_processed(request):
+                log.info("document.already_processed", extra={"content_type": content_type.value})
+                await self._send_completed_webhook(request, log)
+                return ProcessingResult.COMPLETED
+
             blob_size = await self._storage.get_blob_size(
                 self._settings.source_container_name,
                 request.source_blob_name,
             )
             self._validate_size(blob_size)
 
-            await self._convert_and_deliver(request, log)
+            execution_dir.mkdir(parents=True, exist_ok=False)
+            await self._convert_with_timeout(request, content_type, execution_dir, log)
 
-            log.info("document.processing.completed", extra={"duration_ms": _elapsed_ms(started)})
+            log.info(
+                "document.processing.completed",
+                extra={"duration_ms": _elapsed_ms(started), "content_type": content_type.value},
+            )
             return ProcessingResult.COMPLETED
         except PermanentError as exc:
             log.error(
                 "document.processing.failed",
-                extra={"error_code": exc.code, "duration_ms": _elapsed_ms(started)},
+                extra={
+                    "error_code": exc.code,
+                    "duration_ms": _elapsed_ms(started),
+                    "detail": exc.detail,
+                },
             )
             await self._send_failed_webhook(request, exc, log)
             return ProcessingResult.FAILED_PERMANENT
-
-    async def _convert_and_deliver(self, request: ConversionRequest, log: logging.LoggerAdapter) -> None:
-        temp_dir = self._settings.temp_directory / str(request.document_id)
-        source_path = temp_dir / safe_source_filename(request.file_name)
-        try:
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            await self._download(request, source_path, log)
-            markdown = await self._convert(request, source_path, log)
-            await self._upload(request, markdown, temp_dir, log)
-            await self._send_completed_webhook(request, log)
         finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            await self._cleanup_execution_directory(execution_base, execution_dir)
+
+    def _execution_directories(self, request: ConversionRequest) -> tuple[Path, Path]:
+        """Return the ``(base, execution)`` temporary directories for a request.
+
+        The base directory is shared by redeliveries and concurrent instances
+        (``{contextId}/{documentId}``); the execution directory carries a random
+        UUID so no two runs ever share temporary files.
+        """
+        base = (
+            self._settings.temp_directory
+            / str(request.context_id)
+            / str(request.document_id)
+        )
+        return base, base / str(uuid4())
+
+    async def _cleanup_execution_directory(self, base: Path, execution_dir: Path) -> None:
+        """Remove the execution directory and prune empty parent directories.
+
+        Runs on a worker thread so filesystem removal never blocks the event
+        loop. The execution directory is always removed — success, error or
+        cancellation — and empty ``{documentId}``/``{contextId}`` directories
+        are pruned up to (but excluding) the configured temporary root.
+        """
+        if not execution_dir.exists() and not base.exists():
+            return
+
+        def _remove() -> None:
+            shutil.rmtree(execution_dir, ignore_errors=True)
+            parent = base
+            stop = self._settings.temp_directory
+            while parent != stop and parent != stop.parent:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+
+        await asyncio.to_thread(_remove)
+
+    async def _convert_with_timeout(
+        self,
+        request: ConversionRequest,
+        content_type: ContentType,
+        execution_dir: Path,
+        log: logging.LoggerAdapter,
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                self._convert_and_deliver(request, content_type, execution_dir, log),
+                timeout=self._settings.process_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ProcessingTimeoutError(
+                f"Processing exceeded {self._settings.process_timeout_minutes} minutes."
+            ) from exc
+
+    async def _convert_and_deliver(
+        self,
+        request: ConversionRequest,
+        content_type: ContentType,
+        execution_dir: Path,
+        log: logging.LoggerAdapter,
+    ) -> None:
+        markdown = await self._to_markdown(request, content_type, execution_dir, log)
+        await self._upload(request, markdown, execution_dir, log)
+        await self._send_completed_webhook(request, log)
+
+    async def _to_markdown(
+        self,
+        request: ConversionRequest,
+        content_type: ContentType,
+        execution_dir: Path,
+        log: logging.LoggerAdapter,
+    ) -> str:
+        if content_type is ContentType.DOCUMENT:
+            source_path = execution_dir / safe_source_filename(request.file_name)
+            await self._download(request, source_path, log)
+            return await self._convert(request, source_path, log)
+
+        if content_type is ContentType.AUDIO:
+            source_path = execution_dir / safe_source_filename(request.file_name)
+            await self._download(request, source_path, log)
+            return await self._require_audio().to_markdown(request, source_path, execution_dir, log)
+
+        if content_type is ContentType.VIDEO:
+            source_path = execution_dir / safe_source_filename(request.file_name)
+            await self._download(request, source_path, log)
+            return await self._require_video().to_markdown(request, source_path, execution_dir, log)
+
+        raise UnsupportedContentTypeError(f"Unsupported content type '{content_type.value}'.")
+
+    def _require_audio(self) -> AudioProcessor:
+        if self._audio_processor is None:
+            raise UnsupportedContentTypeError("Audio processing is not available.")
+        return self._audio_processor
+
+    def _require_video(self) -> VideoProcessor:
+        if self._video_processor is None:
+            raise UnsupportedContentTypeError("Video processing is not available.")
+        return self._video_processor
 
     async def _download(self, request: ConversionRequest, source_path: Path, log: logging.LoggerAdapter) -> None:
         log.info("document.download.started")
@@ -134,18 +263,22 @@ class DocumentProcessor:
         self,
         request: ConversionRequest,
         markdown: str,
-        temp_dir: Path,
+        execution_dir: Path,
         log: logging.LoggerAdapter,
     ) -> None:
         started = time.perf_counter()
-        output_path = temp_dir / "document.md"
-        output_path.write_text(markdown, encoding="utf-8")
+        output_path = execution_dir / "document.md"
+        await asyncio.to_thread(output_path.write_text, markdown, encoding="utf-8")
         blob_name = self._output_blob_name(request)
         await self._storage.upload_file(self._settings.destination_container_name, blob_name, output_path)
         log.info(
             "document.upload.completed",
             extra={"duration_ms": _elapsed_ms(started), "blob_name": blob_name},
         )
+
+    async def _already_processed(self, request: ConversionRequest) -> bool:
+        blob_name = self._output_blob_name(request)
+        return await self._storage.blob_exists(self._settings.destination_container_name, blob_name)
 
     async def _send_completed_webhook(self, request: ConversionRequest, log: logging.LoggerAdapter) -> None:
         payload = {
@@ -235,14 +368,15 @@ class DocumentProcessor:
             extra={"idempotency_key": idempotency_key, "duration_ms": _elapsed_ms(started)},
         )
 
-    def _validate_extension(self, request: ConversionRequest) -> None:
-        validate_extension(request.file_name)
+    def _validate_input(self, request: ConversionRequest, content_type: ContentType) -> None:
+        if content_type is ContentType.DOCUMENT:
+            validate_extension(request.file_name)
 
     def _validate_size(self, blob_size: int) -> None:
-        if blob_size > self._settings.max_document_size_bytes:
+        if blob_size > self._settings.max_input_size_bytes:
             raise DocumentTooLargeError(
-                f"Document size {blob_size} bytes exceeds the maximum "
-                f"of {self._settings.max_document_size_bytes} bytes."
+                f"Input size {blob_size} bytes exceeds the maximum "
+                f"of {self._settings.max_input_size_bytes} bytes."
             )
 
     def _output_blob_name(self, request: ConversionRequest) -> str:
