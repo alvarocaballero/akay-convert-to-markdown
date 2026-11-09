@@ -1,177 +1,62 @@
-"""Message validation tests."""
-
-from __future__ import annotations
-
+"""Service Bus request validation and recovery tests."""
 import json
-import uuid
+from uuid import uuid4
 
 import pytest
 
 from akay_convert_to_markdown.errors.exceptions import InvalidMessageError, UnsupportedDocumentTypeError
-from akay_convert_to_markdown.models.conversion_request import (
-    parse_conversion_request,
-    recover_invalid_message_identity,
-    validate_extension,
-)
+from akay_convert_to_markdown.models.conversion_request import parse_conversion_request, recover_invalid_message_identity, validate_extension
 
 
-def _message(**overrides) -> str:
-    data = {
-        "documentId": str(uuid.uuid4()),
-        "contextId": str(uuid.uuid4()),
-        "userId": str(uuid.uuid4()),
-        "fileName": "tema-1.pdf",
-        "sourceBlobName": "ctx/doc/tema-1.pdf",
-        "callback": "subject-topic",
-    }
+def message(**overrides):
+    data = {"requestId": str(uuid4()), "source": {"type": "blob", "blobName": "path/a.pdf"},
+            "destinationBlobName": "out/a.md", "callback": "topic-content"}
     data.update(overrides)
     return json.dumps(data)
 
 
-def test_valid_message_parses():
-    request = parse_conversion_request(_message())
-    assert request.document_id is not None
-    assert request.file_name == "tema-1.pdf"
+def test_valid_message_defaults():
+    request = parse_conversion_request(message())
+    assert request.file_name == "a.pdf"
+    assert request.overwrite_destination is False
+    assert request.payload == {}
 
 
-def test_missing_document_id_is_invalid():
-    data = json.loads(_message())
-    del data["documentId"]
+@pytest.mark.parametrize("overrides", [
+    {"requestId": "invalid"}, {"source": {"type": "youtube", "url": "https://example.com"}},
+    {"source": {"type": "blob", "blobName": ""}}, {"destinationBlobName": ""},
+    {"overwriteDestination": "false"}, {"payload": []}, {"callback": ""},
+])
+def test_invalid_message(overrides):
     with pytest.raises(InvalidMessageError):
-        parse_conversion_request(json.dumps(data))
+        parse_conversion_request(message(**overrides))
 
 
-def test_missing_source_blob_name_is_invalid():
-    data = json.loads(_message())
-    del data["sourceBlobName"]
-    with pytest.raises(InvalidMessageError):
-        parse_conversion_request(json.dumps(data))
+def test_invalid_json_and_bytes():
+    for raw in ("{bad", b"\xff", "[]"):
+        with pytest.raises(InvalidMessageError):
+            parse_conversion_request(raw)
 
 
-def test_missing_callback_is_invalid():
-    data = json.loads(_message())
-    del data["callback"]
-    with pytest.raises(InvalidMessageError):
-        parse_conversion_request(json.dumps(data))
+def test_recover_identity_and_payload():
+    request_id = str(uuid4())
+    raw = message(requestId=request_id, payload={"nested": [1, None]})
+    identity = recover_invalid_message_identity(raw)
+    assert identity["requestId"] == request_id
+    assert identity["payload"] == {"nested": [1, None]}
+    assert identity["callback"] == "topic-content"
 
 
-def test_invalid_json_is_invalid():
-    with pytest.raises(InvalidMessageError):
-        parse_conversion_request("{not-json")
+@pytest.mark.parametrize("raw", ['{bad', '[]', '{}', '{"requestId": "../.."}', b'\xff'])
+def test_unrecoverable_identity(raw):
+    assert recover_invalid_message_identity(raw) is None
 
 
-def test_invalid_uuid_is_invalid():
-    with pytest.raises(InvalidMessageError):
-        parse_conversion_request(_message(documentId="not-a-uuid"))
+@pytest.mark.parametrize("name", ["a.pdf", "a.docx", "a.pptx", "a.html", "a.htm", "a.txt", "a.md", "a.PDF"])
+def test_supported_extensions(name):
+    assert validate_extension(name) == name[name.rfind('.'):].lower()
 
 
-def test_numeric_ids_are_valid():
-    request = parse_conversion_request(_message(documentId=1, contextId=2, userId=3))
-
-    assert request.document_id == 1
-    assert request.context_id == 2
-    assert request.user_id == 3
-
-
-def test_mixed_int_and_uuid_ids_are_valid():
-    context_id = str(uuid.uuid4())
-    request = parse_conversion_request(_message(documentId=1, contextId=context_id, userId=3))
-
-    assert request.document_id == 1
-    assert str(request.context_id) == context_id
-    assert request.user_id == 3
-
-
-def test_arbitrary_string_id_is_invalid():
-    with pytest.raises(InvalidMessageError):
-        parse_conversion_request(_message(documentId="../.."))
-
-
-def test_unsupported_extension_rejected():
+def test_unsupported_extension():
     with pytest.raises(UnsupportedDocumentTypeError):
-        validate_extension("tema-1.xyz")
-
-
-@pytest.mark.parametrize("name", ["a.pdf", "a.docx", "a.pptx", "a.html", "a.htm", "a.txt", "a.md", "a.PDF", "a.TXT", "a.MD"])
-def test_supported_extensions_accepted(name):
-    assert validate_extension(name) in {".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md"}
-
-
-def test_txt_is_supported():
-    assert validate_extension("notes.txt") == ".txt"
-
-
-def test_md_is_supported():
-    assert validate_extension("notes.md") == ".md"
-
-
-def test_recover_identity_returns_present_fields():
-    document_id = str(uuid.uuid4())
-    context_id = str(uuid.uuid4())
-    raw = json.dumps({"documentId": document_id, "contextId": context_id})
-
-    identity = recover_invalid_message_identity(raw)
-
-    assert identity is not None
-    assert identity["documentId"] == document_id
-    assert identity["contextId"] == context_id
-    assert "userId" not in identity
-    assert "fileName" not in identity
-    assert "callback" not in identity
-
-
-def test_recover_identity_recovers_callback():
-    document_id = str(uuid.uuid4())
-    raw = json.dumps({"documentId": document_id, "callback": "student-document"})
-
-    identity = recover_invalid_message_identity(raw)
-
-    assert identity is not None
-    assert identity["callback"] == "student-document"
-
-
-def test_recover_identity_none_without_document_id():
-    raw = json.dumps({"contextId": str(uuid.uuid4())})
-    assert recover_invalid_message_identity(raw) is None
-
-
-def test_recover_identity_none_with_invalid_document_id():
-    raw = json.dumps({"documentId": "not-a-uuid"})
-    assert recover_invalid_message_identity(raw) is None
-
-
-def test_recover_identity_none_for_invalid_json():
-    assert recover_invalid_message_identity("{bad") is None
-
-
-def test_recover_identity_recovers_numeric_ids_preserving_type():
-    raw = json.dumps({"documentId": 123, "contextId": 456, "userId": 789})
-
-    identity = recover_invalid_message_identity(raw)
-
-    assert identity is not None
-    assert identity["documentId"] == 123
-    assert identity["contextId"] == 456
-    assert identity["userId"] == 789
-    assert isinstance(identity["documentId"], int)
-
-
-def test_recover_identity_mixed_types():
-    context_id = str(uuid.uuid4())
-    raw = json.dumps({"documentId": 123, "contextId": context_id})
-
-    identity = recover_invalid_message_identity(raw)
-
-    assert identity is not None
-    assert identity["documentId"] == 123
-    assert identity["contextId"] == context_id
-
-
-def test_recover_identity_none_with_path_traversal_document_id():
-    raw = json.dumps({"documentId": "../.."})
-    assert recover_invalid_message_identity(raw) is None
-
-
-def test_recover_identity_none_with_boolean_document_id():
-    raw = json.dumps({"documentId": True})
-    assert recover_invalid_message_identity(raw) is None
+        validate_extension("a.xyz")

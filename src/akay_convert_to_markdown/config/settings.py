@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pydantic import field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ALLOWED_WEBHOOK_URL_SCHEMES = frozenset({"http", "https"})
@@ -28,18 +28,20 @@ class Settings(BaseSettings):
     they are absent. Secrets never carry a default value.
     """
 
-    model_config = SettingsConfigDict(env_file=None, case_sensitive=False, extra="ignore")
+    model_config = SettingsConfigDict(env_file=None, case_sensitive=False, extra="ignore", hide_input_in_errors=True)
 
     # Azure identity -------------------------------------------------------
     azure_client_id: str | None = None
 
     # Azure Blob Storage ---------------------------------------------------
     azure_storage_account_url: str
+    azure_storage_sas_token: str | None = Field(default=None, repr=False)
     source_container_name: str
     destination_container_name: str
 
     # Azure Service Bus ----------------------------------------------------
-    servicebus_fully_qualified_namespace: str
+    servicebus_fully_qualified_namespace: str | None = None
+    servicebus_connection_string: str | None = Field(default=None, repr=False)
     servicebus_queue_name: str
     servicebus_max_lock_renewal_seconds: int = 900
 
@@ -72,6 +74,48 @@ class Settings(BaseSettings):
 
     # Observability --------------------------------------------------------
     log_level: str = "INFO"
+
+    @field_validator("azure_storage_account_url")
+    @classmethod
+    def _validate_storage_account_url(cls, value: str) -> str:
+        if "?" in value:
+            raise ValueError("AZURE_STORAGE_ACCOUNT_URL must not contain a query string; configure SAS separately.")
+        return value
+
+    @field_validator("azure_storage_sas_token", mode="before")
+    @classmethod
+    def _normalize_storage_sas_token(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+            if value.startswith("?"):
+                value = value[1:].strip()
+                if not value:
+                    raise ValueError("AZURE_STORAGE_SAS_TOKEN must contain a token after '?'.")
+        return value
+
+    @field_validator("servicebus_fully_qualified_namespace", "servicebus_connection_string", mode="before")
+    @classmethod
+    def _normalize_servicebus_connection(cls, value):
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @field_validator("servicebus_queue_name")
+    @classmethod
+    def _validate_servicebus_queue_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("SERVICEBUS_QUEUE_NAME must not be empty.")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_servicebus_authentication(self) -> "Settings":
+        if not self.servicebus_connection_string and not self.servicebus_fully_qualified_namespace:
+            raise ValueError("Configure at least one of SERVICEBUS_CONNECTION_STRING or "
+                             "SERVICEBUS_FULLY_QUALIFIED_NAMESPACE.")
+        return self
 
     @field_validator("speech_locales", mode="before")
     @classmethod

@@ -58,6 +58,7 @@ async def test_mp3_dispatch_uses_audio_processor(settings, fake_storage, fake_co
     assert len(audio.calls) == 1
     assert len(fake_converter.calls) == 0
     assert len(fake_webhook.calls) == 1
+    assert fake_webhook.calls[0][1]["eventType"] == "document.conversion.completed"
 
 
 async def test_mp4_dispatch_uses_video_processor(settings, fake_storage, fake_converter, fake_webhook):
@@ -70,6 +71,7 @@ async def test_mp4_dispatch_uses_video_processor(settings, fake_storage, fake_co
     assert result is ProcessingResult.COMPLETED
     assert len(video.calls) == 1
     assert video.calls[0][1].suffix == ".mp4"
+    assert fake_webhook.calls[0][1]["eventType"] == "document.conversion.completed"
 
 
 async def test_unsupported_extension_still_fails_as_document(settings, fake_storage, fake_converter, fake_webhook):
@@ -97,7 +99,7 @@ async def test_processing_timeout_sends_failed_event(settings, fake_storage, fak
 
 async def test_existing_output_is_skipped(settings, fake_storage, fake_converter, fake_webhook):
     request = make_request(file_name="a.pdf")
-    fake_storage.existing_blobs[f"{request.context_id}/{request.document_id}/document.md"] = True
+    fake_storage.existing_blobs[request.destination_blob_name] = True
     processor = _processor(settings, fake_storage, fake_converter, fake_webhook)
 
     result = await processor.process(request)
@@ -122,8 +124,18 @@ async def test_media_failure_sends_failed_event_with_sanitized_message(
 
     assert result is ProcessingResult.FAILED_PERMANENT
     error = fake_webhook.calls[0][1]["error"]
+    assert fake_webhook.calls[0][1]["eventType"] == "document.conversion.failed"
     assert error["code"] == "DOCUMENT_CONVERSION_FAILED"
     assert "sensitive" not in error["message"]
+
+
+async def test_video_failure_keeps_document_event_type(settings, fake_storage, fake_converter, fake_webhook):
+    video = FakeMediaProcessor()
+    video.error = DocumentConversionError("video conversion failed")
+    processor = _processor(settings, fake_storage, fake_converter, fake_webhook, video=video)
+    result = await processor.process(make_request(file_name="a.mp4"))
+    assert result is ProcessingResult.FAILED_PERMANENT
+    assert fake_webhook.calls[0][1]["eventType"] == "document.conversion.failed"
 
 
 async def test_media_temp_files_removed(settings, fake_storage, fake_converter, fake_webhook):
@@ -133,5 +145,5 @@ async def test_media_temp_files_removed(settings, fake_storage, fake_converter, 
 
     await processor.process(request)
 
-    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    base = settings.temp_directory / str(request.request_id)
     assert not base.exists()

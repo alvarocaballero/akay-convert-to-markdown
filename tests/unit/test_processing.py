@@ -33,14 +33,14 @@ async def test_success_uploads_and_notifies(settings, fake_storage, fake_convert
     assert len(fake_storage.uploads) == 1
     container, blob_name, _ = fake_storage.uploads[0]
     assert container == "markdown"
-    assert blob_name == f"{request.context_id}/{request.document_id}/document.md"
+    assert blob_name == request.destination_blob_name
 
     assert len(fake_webhook.calls) == 1
     callback, payload, idempotency_key = fake_webhook.calls[0]
     assert callback == request.callback
     assert payload["eventType"] == "document.conversion.completed"
-    assert payload["callback"] == request.callback
-    assert idempotency_key == f"convert-to-markdown:{request.document_id}:completed"
+    assert "callback" not in payload
+    assert idempotency_key == f"convert-to-markdown:{request.request_id}:completed"
 
 
 async def test_permanent_failure_sends_failed_event(settings, fake_storage, fake_converter, fake_webhook):
@@ -55,9 +55,9 @@ async def test_permanent_failure_sends_failed_event(settings, fake_storage, fake
     callback, payload, idempotency_key = fake_webhook.calls[0]
     assert callback == request.callback
     assert payload["eventType"] == "document.conversion.failed"
-    assert payload["callback"] == request.callback
+    assert "callback" not in payload
     assert payload["error"]["code"] == "DOCUMENT_CONVERSION_FAILED"
-    assert idempotency_key == f"convert-to-markdown:{request.document_id}:failed"
+    assert idempotency_key == f"convert-to-markdown:{request.request_id}:failed"
 
 
 async def test_unsupported_extension_sends_failed_event(settings, fake_storage, fake_converter, fake_webhook):
@@ -74,7 +74,7 @@ async def test_unsupported_extension_sends_failed_event(settings, fake_storage, 
 
 async def test_source_missing_sends_failed_event(settings, fake_storage, fake_converter, fake_webhook):
     request = make_request()
-    fake_storage.missing.add(request.source_blob_name)
+    fake_storage.missing.add(request.source.blob_name)
     processor = _make_processor(settings, fake_storage, fake_converter, fake_webhook)
 
     result = await processor.process(request)
@@ -87,7 +87,7 @@ async def test_maximum_size_exceeded(tmp_path, fake_converter, fake_webhook):
     storage = FakeStorage()
     settings = make_settings(temp_directory=tmp_path, max_input_size_mb=1)
     request = make_request()
-    storage.blob_sizes[request.source_blob_name] = 2 * 1024 * 1024
+    storage.blob_sizes[request.source.blob_name] = 2 * 1024 * 1024
     processor = _make_processor(settings, storage, fake_converter, fake_webhook)
 
     result = await processor.process(request)
@@ -141,7 +141,7 @@ async def test_temp_files_removed_after_success(tmp_path, fake_converter, fake_w
 
     await processor.process(request)
 
-    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    base = settings.temp_directory / str(request.request_id)
     assert not base.exists()
 
 
@@ -154,7 +154,7 @@ async def test_temp_files_removed_after_failure(tmp_path, fake_converter, fake_w
 
     await processor.process(request)
 
-    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    base = settings.temp_directory / str(request.request_id)
     assert not base.exists()
 
 
@@ -173,7 +173,7 @@ async def test_temp_files_removed_after_timeout(tmp_path):
     result = await processor.process(request)
 
     assert result is ProcessingResult.FAILED_PERMANENT
-    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    base = settings.temp_directory / str(request.request_id)
     assert not base.exists()
 
 
@@ -197,23 +197,23 @@ async def test_temp_files_removed_on_cancellation(tmp_path):
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    base = settings.temp_directory / str(request.request_id)
     assert not base.exists()
 
 
 async def test_notify_invalid_message_payload(settings, fake_storage, fake_converter, fake_webhook):
     processor = _make_processor(settings, fake_storage, fake_converter, fake_webhook)
     document_id = "47cd79ca-0000-0000-0000-000000000000"
-    identity = {"documentId": document_id, "fileName": "a.pdf", "callback": "subject-topic"}
+    identity = {"requestId": document_id, "callback": "topic-content"}
 
     await processor.notify_invalid_message(identity, make_logger())
 
     assert len(fake_webhook.calls) == 1
     callback, payload, idempotency_key = fake_webhook.calls[0]
-    assert callback == "subject-topic"
+    assert callback == "topic-content"
     assert payload["eventType"] == "document.conversion.failed"
-    assert payload["callback"] == "subject-topic"
-    assert payload["documentId"] == document_id
+    assert "callback" not in payload
+    assert payload["requestId"] == document_id
     assert payload["error"]["code"] == "INVALID_MESSAGE"
     assert idempotency_key == f"convert-to-markdown:{document_id}:failed"
 
@@ -227,38 +227,36 @@ async def test_notify_invalid_message_unknown_callback_is_poison(settings, fake_
     assert fake_webhook.calls == []
 
 
-async def test_completed_webhook_preserves_int_ids(settings, fake_storage, fake_converter, fake_webhook):
+async def test_completed_webhook_preserves_payload(settings, fake_storage, fake_converter, fake_webhook):
     processor = _make_processor(settings, fake_storage, fake_converter, fake_webhook)
-    request = make_request(document_id=123, context_id=456, user_id=789)
+    request = make_request(payload={"documentId": 123, "nested": {"values": [1, None, "x"]}})
 
     await processor.process(request)
 
     _, payload, _ = fake_webhook.calls[0]
-    assert payload["documentId"] == 123
-    assert payload["contextId"] == 456
-    assert payload["userId"] == 789
-    assert isinstance(payload["documentId"], int)
+    assert payload["payload"] == request.payload
+    assert payload["source"] == {"type": "blob", "blobName": request.source.blob_name}
+    assert payload["destinationBlobName"] == request.destination_blob_name
+    assert payload["contentType"] == "document"
 
 
-async def test_completed_webhook_preserves_uuid_ids(settings, fake_storage, fake_converter, fake_webhook):
+async def test_completed_webhook_preserves_request_id(settings, fake_storage, fake_converter, fake_webhook):
     processor = _make_processor(settings, fake_storage, fake_converter, fake_webhook)
     request = make_request()
 
     await processor.process(request)
 
     _, payload, _ = fake_webhook.calls[0]
-    assert payload["documentId"] == str(request.document_id)
-    assert payload["contextId"] == str(request.context_id)
-    assert isinstance(payload["documentId"], str)
+    assert payload["requestId"] == str(request.request_id)
 
 
-async def test_completed_webhook_preserves_mixed_ids(settings, fake_storage, fake_converter, fake_webhook):
+async def test_failed_webhook_preserves_payload(settings, fake_storage, fake_converter, fake_webhook):
     processor = _make_processor(settings, fake_storage, fake_converter, fake_webhook)
-    request = make_request(document_id=123)
+    fake_converter.error = DocumentConversionError("failed")
+    request = make_request(payload={"documentId": 123, "other": [True, None]})
 
     await processor.process(request)
 
     _, payload, _ = fake_webhook.calls[0]
-    assert payload["documentId"] == 123
-    assert isinstance(payload["documentId"], int)
-    assert isinstance(payload["contextId"], str)
+    assert payload["payload"] == request.payload
+    assert payload["eventType"] == "document.conversion.failed"

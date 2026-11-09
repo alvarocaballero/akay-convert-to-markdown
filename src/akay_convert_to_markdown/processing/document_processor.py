@@ -22,7 +22,7 @@ import logging
 import shutil
 import time
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from akay_convert_to_markdown.config.settings import Settings
 from akay_convert_to_markdown.conversion.document_converter import DocumentConverter
@@ -45,14 +45,6 @@ from akay_convert_to_markdown.storage.blob_storage import BlobStorage
 
 def _elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
-
-
-def _to_wire(value: int | UUID) -> int | str:
-    """Serialize an identifier for the webhook payload, preserving its type.
-
-    Integer ids are emitted as JSON numbers; UUID-based ids as strings.
-    """
-    return value if isinstance(value, int) else str(value)
 
 
 def safe_source_filename(file_name: str) -> str:
@@ -94,9 +86,7 @@ class DocumentProcessor:
     async def process(self, request: ConversionRequest) -> ProcessingResult:
         log = context_logger(
             self._logger,
-            document_id=str(request.document_id),
-            context_id=str(request.context_id),
-            user_id=str(request.user_id),
+            request_id=str(request.request_id),
             file_name=request.file_name,
             callback=request.callback,
         )
@@ -109,14 +99,14 @@ class DocumentProcessor:
             )
             self._validate_input(request, content_type)
 
-            if await self._already_processed(request):
+            if not request.overwrite_destination and await self._already_processed(request):
                 log.info("document.already_processed", extra={"content_type": content_type.value})
                 await self._send_completed_webhook(request, log)
                 return ProcessingResult.COMPLETED
 
             blob_size = await self._storage.get_blob_size(
                 self._settings.source_container_name,
-                request.source_blob_name,
+                request.source.blob_name,
             )
             self._validate_size(blob_size)
 
@@ -145,15 +135,10 @@ class DocumentProcessor:
     def _execution_directories(self, request: ConversionRequest) -> tuple[Path, Path]:
         """Return the ``(base, execution)`` temporary directories for a request.
 
-        The base directory is shared by redeliveries and concurrent instances
-        (``{contextId}/{documentId}``); the execution directory carries a random
-        UUID so no two runs ever share temporary files.
+        The base directory is shared by redeliveries of a request; each execution
+        carries a random UUID so concurrent runs never share temporary files.
         """
-        base = (
-            self._settings.temp_directory
-            / str(request.context_id)
-            / str(request.document_id)
-        )
+        base = self._settings.temp_directory / str(request.request_id)
         return base, base / str(uuid4())
 
     async def _cleanup_execution_directory(self, base: Path, execution_dir: Path) -> None:
@@ -161,8 +146,8 @@ class DocumentProcessor:
 
         Runs on a worker thread so filesystem removal never blocks the event
         loop. The execution directory is always removed — success, error or
-        cancellation — and empty ``{documentId}``/``{contextId}`` directories
-        are pruned up to (but excluding) the configured temporary root.
+        cancellation — and the empty request directory is pruned without
+        removing the configured temporary root.
         """
         if not execution_dir.exists() and not base.exists():
             return
@@ -247,7 +232,7 @@ class DocumentProcessor:
         started = time.perf_counter()
         await self._storage.download_to_file(
             self._settings.source_container_name,
-            request.source_blob_name,
+            request.source.blob_name,
             source_path,
         )
         log.info("document.download.completed", extra={"duration_ms": _elapsed_ms(started)})
@@ -270,7 +255,8 @@ class DocumentProcessor:
         output_path = execution_dir / "document.md"
         await asyncio.to_thread(output_path.write_text, markdown, encoding="utf-8")
         blob_name = self._output_blob_name(request)
-        await self._storage.upload_file(self._settings.destination_container_name, blob_name, output_path)
+        await self._storage.upload_file(self._settings.destination_container_name, blob_name, output_path,
+                                        overwrite=request.overwrite_destination)
         log.info(
             "document.upload.completed",
             extra={"duration_ms": _elapsed_ms(started), "blob_name": blob_name},
@@ -281,22 +267,11 @@ class DocumentProcessor:
         return await self._storage.blob_exists(self._settings.destination_container_name, blob_name)
 
     async def _send_completed_webhook(self, request: ConversionRequest, log: logging.LoggerAdapter) -> None:
-        payload = {
-            "eventType": "document.conversion.completed",
-            "callback": request.callback,
-            "documentId": _to_wire(request.document_id),
-            "contextId": _to_wire(request.context_id),
-            "userId": _to_wire(request.user_id),
-            "fileName": request.file_name,
-            "output": {
-                "containerName": self._settings.destination_container_name,
-                "blobName": self._output_blob_name(request),
-            },
-        }
+        payload = self._webhook_payload(request, "document.conversion.completed")
         await self._notify(
             request.callback,
             payload,
-            f"convert-to-markdown:{request.document_id}:completed",
+            f"convert-to-markdown:{request.request_id}:completed",
             log,
         )
 
@@ -306,27 +281,31 @@ class DocumentProcessor:
         exc: PermanentError,
         log: logging.LoggerAdapter,
     ) -> None:
-        payload = {
-            "eventType": "document.conversion.failed",
-            "callback": request.callback,
-            "documentId": _to_wire(request.document_id),
-            "contextId": _to_wire(request.context_id),
-            "userId": _to_wire(request.user_id),
-            "fileName": request.file_name,
-            "error": {"code": exc.code, "message": exc.message},
+        payload = self._webhook_payload(request, "document.conversion.failed")
+        payload["error"] = {"code": exc.code, "message": exc.message}
+        await self._notify(request.callback, payload, f"convert-to-markdown:{request.request_id}:failed", log)
+
+    def _webhook_payload(self, request: ConversionRequest, event_type: str) -> dict:
+        content_type = detect_content_type(file_name=request.file_name, explicit_type=request.content_type)
+        return {
+            "eventType": event_type,
+            "requestId": str(request.request_id),
+            "source": request.source.model_dump(by_alias=True),
+            "destinationBlobName": request.destination_blob_name,
+            "contentType": content_type.value,
+            "payload": request.payload,
         }
-        await self._notify(request.callback, payload, f"convert-to-markdown:{request.document_id}:failed", log)
 
     async def notify_invalid_message(self, identity: dict, log: logging.LoggerAdapter) -> None:
         """Send a ``document.conversion.failed`` webhook for an invalid message.
 
-        Only sends when both the document identity and a configured callback are
+        Only sends when both the request identity and a configured callback are
         recoverable; otherwise it logs and returns so the consumer settles the
         poison message. Raises :class:`WebhookError` (transient) when the webhook
         cannot be delivered, so the consumer abandons the message.
         """
         callback = identity.get("callback")
-        if callback is None or not self._webhook.is_configured(callback):
+        if not isinstance(callback, str) or not self._webhook.is_configured(callback):
             log.error(
                 "webhook.callback_not_configured",
                 extra={"callback": callback, "reason": "cannot notify invalid message"},
@@ -335,17 +314,16 @@ class DocumentProcessor:
 
         payload: dict = {
             "eventType": "document.conversion.failed",
-            "callback": callback,
-            "documentId": identity["documentId"],
+            "requestId": identity["requestId"],
         }
-        for field in ("contextId", "userId", "fileName"):
+        for field in ("source", "destinationBlobName", "contentType", "payload"):
             if identity.get(field) is not None:
                 payload[field] = identity[field]
         payload["error"] = {
             "code": "INVALID_MESSAGE",
             "message": "Message has missing or invalid required fields.",
         }
-        await self._notify(callback, payload, f"convert-to-markdown:{identity['documentId']}:failed", log)
+        await self._notify(callback, payload, f"convert-to-markdown:{identity['requestId']}:failed", log)
 
     async def _notify(
         self,
@@ -380,4 +358,4 @@ class DocumentProcessor:
             )
 
     def _output_blob_name(self, request: ConversionRequest) -> str:
-        return f"{request.context_id}/{request.document_id}/document.md"
+        return request.destination_blob_name

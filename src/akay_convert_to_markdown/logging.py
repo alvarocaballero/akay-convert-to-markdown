@@ -9,6 +9,7 @@ from typing import Any
 
 # Fields rendered in the JSON output when present on the log record.
 _LOG_FIELDS = (
+    "request_id",
     "document_id",
     "context_id",
     "user_id",

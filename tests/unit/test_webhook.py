@@ -17,7 +17,7 @@ def _client(handler, settings=None) -> WebhookClient:
 
 async def test_success_2xx():
     webhook = _client(lambda request: httpx.Response(200, json={"ok": True}))
-    await webhook.send("subject-topic", {"eventType": "x"}, "key-1")
+    await webhook.send("topic-content", {"eventType": "x"}, "key-1")
     await webhook.aclose()
 
 
@@ -25,21 +25,25 @@ async def test_sends_expected_headers():
     seen: dict[str, str | None] = {}
 
     def handler(request: httpx.Request):
-        seen["key"] = request.headers.get("X-Akay-Webhook-Key")
+        seen["key"] = request.headers.get("X-Api-Key")
+        seen["old_key"] = request.headers.get("X-Akay-Webhook-Key")
+        seen["content_type"] = request.headers.get("Content-Type")
         seen["idem"] = request.headers.get("Idempotency-Key")
         return httpx.Response(200)
 
     webhook = _client(handler)
-    await webhook.send("subject-topic", {"a": 1}, "key-1")
+    await webhook.send("topic-content", {"a": 1}, "key-1")
     await webhook.aclose()
     assert seen["key"] == "test-secret"
+    assert seen["old_key"] is None
+    assert seen["content_type"] == "application/json"
     assert seen["idem"] == "key-1"
 
 
 async def test_two_callbacks_resolve_to_different_urls():
     settings = make_settings(
         webhook_callbacks={
-            "subject-topic": "https://example.com/subject-topic",
+            "topic-content": "https://example.com/topic-content",
             "student-document": "https://example.com/student-document",
         }
     )
@@ -50,11 +54,11 @@ async def test_two_callbacks_resolve_to_different_urls():
         return httpx.Response(200)
 
     webhook = _client(handler, settings)
-    await webhook.send("subject-topic", {"a": 1}, "k1")
+    await webhook.send("topic-content", {"a": 1}, "k1")
     await webhook.send("student-document", {"a": 1}, "k2")
     await webhook.aclose()
 
-    assert urls == ["https://example.com/subject-topic", "https://example.com/student-document"]
+    assert urls == ["https://example.com/topic-content", "https://example.com/student-document"]
 
 
 async def test_unknown_callback_raises_without_http():
@@ -69,6 +73,13 @@ async def test_unknown_callback_raises_without_http():
         await webhook.send("some-unknown-callback", {}, "key")
     await webhook.aclose()
     assert calls == []
+
+
+async def test_previous_callback_has_no_implicit_alias():
+    webhook = _client(lambda request: httpx.Response(200))
+    with pytest.raises(CallbackNotConfiguredError):
+        await webhook.send("subject-topic", {}, "key")
+    await webhook.aclose()
 
 
 async def test_arbitrary_url_cannot_bypass_config():
@@ -95,7 +106,7 @@ async def test_client_errors_are_not_retried(status):
 
     webhook = _client(handler)
     with pytest.raises(WebhookError):
-        await webhook.send("subject-topic", {}, "key")
+        await webhook.send("topic-content", {}, "key")
     await webhook.aclose()
     assert len(calls) == 1
 
@@ -111,7 +122,7 @@ async def test_transient_status_is_retried_then_succeeds(status):
         return httpx.Response(200)
 
     webhook = _client(handler)
-    await webhook.send("subject-topic", {}, "key")
+    await webhook.send("topic-content", {}, "key")
     await webhook.aclose()
     assert len(calls) == 2
 
@@ -126,7 +137,7 @@ async def test_timeout_is_retried():
         return httpx.Response(200)
 
     webhook = _client(handler)
-    await webhook.send("subject-topic", {}, "key")
+    await webhook.send("topic-content", {}, "key")
     await webhook.aclose()
     assert len(calls) == 2
 
@@ -140,6 +151,6 @@ async def test_retries_exhausted():
 
     webhook = _client(handler)
     with pytest.raises(WebhookError):
-        await webhook.send("subject-topic", {}, "key")
+        await webhook.send("topic-content", {}, "key")
     await webhook.aclose()
     assert len(calls) == 3  # default WEBHOOK_RETRY_COUNT

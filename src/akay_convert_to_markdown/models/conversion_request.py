@@ -1,134 +1,70 @@
-"""Service Bus message contract and its validation.
-
-``contextId`` is opaque metadata from the worker's point of view. The worker
-never interprets it as a Subject, Topic, Course, Center or any other Akay
-domain entity.
-"""
+"""Service Bus conversion request and invalid-message recovery."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import PurePosixPath
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 
-from akay_convert_to_markdown.errors.exceptions import (
-    InvalidMessageError,
-    UnsupportedDocumentTypeError,
-)
+from akay_convert_to_markdown.errors.exceptions import InvalidMessageError, UnsupportedDocumentTypeError
 
-SUPPORTED_EXTENSIONS = frozenset(
-    {".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md"}
-)
+SUPPORTED_EXTENSIONS = frozenset({".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md"})
+
+
+class BlobSource(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["blob"]
+    blob_name: str = Field(alias="blobName", min_length=1)
 
 
 class ConversionRequest(BaseModel):
-    """A validated content conversion request.
-
-    Content is located by ``sourceBlobName``. All content types (document,
-    audio and video) are downloaded from Blob Storage.
-    """
-
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    document_id: int | UUID = Field(alias="documentId")
-    context_id: int | UUID = Field(alias="contextId")
-    user_id: int | UUID = Field(alias="userId")
-    file_name: str = Field(alias="fileName", min_length=1)
-    source_blob_name: str = Field(alias="sourceBlobName", min_length=1)
+    request_id: UUID = Field(alias="requestId")
+    source: BlobSource
+    destination_blob_name: str = Field(alias="destinationBlobName", min_length=1)
     content_type: str | None = Field(default=None, alias="contentType", min_length=1)
-    callback: str = Field(alias="callback", min_length=1)
+    overwrite_destination: StrictBool = Field(default=False, alias="overwriteDestination")
+    callback: str = Field(min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def file_name(self) -> str:
+        return PurePosixPath(self.source.blob_name).name
 
 
 def parse_conversion_request(raw: str | bytes) -> ConversionRequest:
-    """Parse and validate a raw Service Bus message body.
-
-    Raises :class:`InvalidMessageError` when the body is not valid JSON or any
-    required field is missing or malformed.
-    """
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8")
-
     try:
         data = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise InvalidMessageError("Message body is not valid JSON.") from exc
-
-    if not isinstance(data, dict):
-        raise InvalidMessageError("Message body must be a JSON object.")
-
-    try:
+        if not isinstance(data, dict):
+            raise ValueError("Message body must be a JSON object")
         return ConversionRequest.model_validate(data)
-    except ValidationError as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError, ValueError, TypeError) as exc:
         raise InvalidMessageError("Message has missing or invalid required fields.") from exc
 
 
 def validate_extension(file_name: str) -> str:
-    """Return the lowercase extension if supported, otherwise raise.
-
-    Raises :class:`UnsupportedDocumentTypeError` for any extension outside the
-    initial supported set.
-    """
-    extension = Path(file_name).suffix.lower()
+    extension = PurePosixPath(file_name).suffix.lower()
     if extension not in SUPPORTED_EXTENSIONS:
         raise UnsupportedDocumentTypeError(f"Document type '{extension}' is not supported.")
     return extension
 
 
-def _recover_id(value: object) -> int | str | None:
-    """Normalize a raw identity value to ``int`` or a canonical UUID string.
-
-    Returns ``None`` for anything that is not an integer or a valid UUID, so
-    only safe, opaque identifiers are propagated.
-    """
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, str):
-        try:
-            return str(UUID(value))
-        except (ValueError, TypeError):
-            return None
-    return None
-
-
 def recover_invalid_message_identity(raw: str | bytes) -> dict | None:
-    """Best-effort recovery of identity fields from an invalid message.
-
-    Used to build a ``document.conversion.failed`` webhook when strict
-    validation fails. Returns ``None`` when the message cannot be identified
-    well enough to build a meaningful failure webhook (i.e. no valid
-    ``documentId``).
-    """
-    if isinstance(raw, bytes):
-        try:
-            raw = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-
+    """Recover a request ID, callback and safe JSON fields for failure notification."""
     try:
         data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
+        if not isinstance(data, dict):
+            return None
+        request_id = str(UUID(str(data.get("requestId"))))
+    except (ValueError, TypeError, UnicodeDecodeError):
         return None
-
-    if not isinstance(data, dict):
-        return None
-
-    document_id = _recover_id(data.get("documentId"))
-    if document_id is None:
-        return None
-
-    identity: dict = {"documentId": document_id}
-    for field in ("contextId", "userId"):
-        normalized = _recover_id(data.get(field))
-        if normalized is not None:
-            identity[field] = normalized
-    for field in ("fileName", "callback"):
-        value = data.get(field)
-        if value is not None:
-            identity[field] = value
+    identity = {"requestId": request_id}
+    for field in ("callback", "source", "destinationBlobName", "contentType", "payload"):
+        if field in data:
+            identity[field] = data[field]
     return identity

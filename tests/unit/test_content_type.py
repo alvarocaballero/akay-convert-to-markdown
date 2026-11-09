@@ -17,9 +17,18 @@ def test_audio_extensions_map_to_audio(name):
     assert detect_content_type(file_name=name) is ContentType.AUDIO
 
 
-@pytest.mark.parametrize("name", ["a.mp4", "a.mov", "a.mkv", "a.webm", "a.avi"])
+@pytest.mark.parametrize("name", ["a.mp4", "a.mov", "a.mkv", "a.webm", "a.avi", "a.m4v", "a.mpg", "a.mpeg", "a.wmv"])
 def test_video_extensions_map_to_video(name):
     assert detect_content_type(file_name=name) is ContentType.VIDEO
+
+
+@pytest.mark.parametrize("extension,expected", [
+    *((ext, ContentType.DOCUMENT) for ext in ("pdf", "docx", "pptx", "html", "htm", "txt", "md")),
+    *((ext, ContentType.AUDIO) for ext in ("mp3", "wav", "aac", "m4a", "ogg", "opus", "flac")),
+    *((ext, ContentType.VIDEO) for ext in ("mp4", "mov", "mkv", "webm", "avi", "m4v", "mpg", "mpeg", "wmv")),
+])
+def test_extensions_are_case_insensitive(extension, expected):
+    assert detect_content_type(file_name=f"a.{extension.upper()}") is expected
 
 
 def test_explicit_type_wins_over_extension():

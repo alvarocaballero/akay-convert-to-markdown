@@ -17,7 +17,7 @@ def make_settings(**overrides) -> Settings:
         destination_container_name="markdown",
         servicebus_fully_qualified_namespace="fake.servicebus.windows.net",
         servicebus_queue_name="conversion",
-        webhook_callbacks={"subject-topic": "https://webhook.example.com/akay"},
+        webhook_callbacks={"topic-content": "https://webhook.example.com/akay"},
         webhook_api_key="test-secret",
         webhook_retry_delay_seconds=0.0,
     )
@@ -27,13 +27,14 @@ def make_settings(**overrides) -> Settings:
 
 def make_request(**overrides) -> ConversionRequest:
     values: dict = dict(
-        document_id=uuid4(),
-        context_id=uuid4(),
-        user_id=uuid4(),
-        file_name="tema-1.pdf",
-        source_blob_name="ctx/doc/tema-1.pdf",
-        callback="subject-topic",
+        request_id=uuid4(),
+        source={"type": "blob", "blobName": "ctx/doc/tema-1.pdf"},
+        destination_blob_name="ctx/doc/document.md",
+        callback="topic-content",
     )
+    file_name = overrides.pop("file_name", None)
+    if file_name:
+        values["source"] = {"type": "blob", "blobName": f"ctx/doc/{file_name}"}
     values.update(overrides)
     return ConversionRequest(**values)
 
@@ -69,10 +70,13 @@ class FakeStorage:
         destination.write_bytes(b"dummy document content")
         self.downloads.append((container, blob_name, destination))
 
-    async def upload_file(self, container: str, blob_name: str, source) -> None:
+    async def upload_file(self, container: str, blob_name: str, source, *, overwrite: bool = False) -> None:
         if self.upload_error:
             raise self.upload_error
+        if not overwrite and self.existing_blobs.get(blob_name, False):
+            return
         self.uploads.append((container, blob_name, source))
+        self.existing_blobs[blob_name] = True
 
     async def aclose(self) -> None:
         pass
@@ -93,7 +97,7 @@ class FakeConverter:
 
 class FakeWebhook:
     def __init__(self, callbacks: dict[str, str] | None = None) -> None:
-        self._callbacks = callbacks or {"subject-topic": "https://webhook.example.com/akay"}
+        self._callbacks = callbacks or {"topic-content": "https://webhook.example.com/akay"}
         self.calls: list[tuple[str, dict, str]] = []
         self.error = None
 

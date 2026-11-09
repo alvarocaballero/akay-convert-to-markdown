@@ -23,8 +23,8 @@ The worker performs a single, well-scoped job:
 7. Completes the Service Bus message only when processing **and** the
    corresponding webhook notification have succeeded.
 
-The worker has **no knowledge** of domain entities. `contextId` and
-`documentId` are treated as opaque metadata.
+The worker has **no knowledge** of domain entities. Client metadata is carried
+unchanged in the request's `payload` and returned in webhook notifications.
 
 ## Architecture
 
@@ -80,9 +80,10 @@ Media processing requires `ffmpeg` and `ffprobe` on the PATH.
 
 ## Azure authentication
 
-The worker uses Azure Identity with the **async**
-`DefaultAzureCredential`. It never stores Storage or Service Bus connection
-strings.
+Azure Blob Storage uses the optional `AZURE_STORAGE_SAS_TOKEN` when configured;
+otherwise it uses the **async** `DefaultAzureCredential`. Azure Service Bus
+independently uses that Azure Identity credential with a namespace, or a
+separate connection string, including for the local emulator.
 
 - In the Container App, a **User Assigned Managed Identity** is used. Set its
   client ID via `AZURE_CLIENT_ID`.
@@ -108,11 +109,13 @@ Do **not** grant Owner or Contributor.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `AZURE_CLIENT_ID` | no | — | User Assigned Managed Identity client ID |
-| `AZURE_STORAGE_ACCOUNT_URL` | yes | — | e.g. `https://<account>.blob.core.windows.net` |
+| `AZURE_STORAGE_ACCOUNT_URL` | yes | — | Account URL without a query string, e.g. `https://<account>.blob.core.windows.net` |
+| `AZURE_STORAGE_SAS_TOKEN` | no | — | Secret SAS token, with or without `?`; takes precedence over Azure Identity for Blob Storage |
 | `SOURCE_CONTAINER_NAME` | yes | — | Source container name |
 | `DESTINATION_CONTAINER_NAME` | yes | — | Destination container name |
-| `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` | yes | — | e.g. `<ns>.servicebus.windows.net` |
-| `SERVICEBUS_QUEUE_NAME` | yes | — | Queue name |
+| `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` | one of** | — | e.g. `<ns>.servicebus.windows.net`; uses Azure Identity |
+| `SERVICEBUS_CONNECTION_STRING` | one of** | — | Service Bus connection string, including emulator mode (secret) |
+| `SERVICEBUS_QUEUE_NAME` | yes | — | Queue name, e.g. `convert-to-markdown` |
 | `SERVICEBUS_MAX_LOCK_RENEWAL_SECONDS` | no | `900` | Max lock renewal duration per message |
 | `WEBHOOK_CALLBACKS` | yes | — | JSON mapping of callback id → webhook URL |
 | `WEBHOOK_API_KEY` | yes | — | Webhook secret (never logged) |
@@ -137,10 +140,55 @@ Do **not** grant Owner or Contributor.
 
 \* Required only when processing audio/video.
 
+\** Configure at least one of `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` and
+`SERVICEBUS_CONNECTION_STRING`. When both are present, the namespace takes
+precedence. Empty or whitespace-only values are treated as absent. There is no
+automatic fallback if the selected connection fails. Blob Storage authentication
+is selected independently of the Service Bus mode.
+
 The application **fails fast at startup** if a mandatory variable is absent.
 Secrets have no default values.
 
 ## Running locally
+
+For the local Service Bus Emulator, provide the following environment values
+through your local secret configuration (the key below is a placeholder):
+
+```text
+SERVICEBUS_CONNECTION_STRING=Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
+SERVICEBUS_QUEUE_NAME=convert-to-markdown
+WEBHOOK_CALLBACKS={"topic-content":"http://localhost:5246/api/webhooks/topic-content-converted"}
+WEBHOOK_API_KEY=<local-webhook-api-key>
+```
+
+For the emulator, leave `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` absent or empty,
+otherwise it takes precedence over the connection string. Configure the
+emulator's queue separately. A process running directly on the host can use
+`localhost` for both the emulator and Akay.Be. From a container, `localhost`
+refers to that container: use the appropriate Docker service name for a
+containerized emulator or backend, or `host.docker.internal` when connecting
+to a host process where supported. The complete Docker composition is a
+separate setup step.
+
+For local Docker development, configure a user delegation SAS limited to the
+container, with read and write permissions and an expiry. The account URL must
+not contain a SAS or any query string. Empty or whitespace-only SAS values use
+`DefaultAzureCredential` instead; a token may have a leading `?`. Renew and
+update the token when it expires, then restart the worker to load it. A
+container-scoped SAS only authorizes that container, so both source and
+destination must be within its scope:
+
+```text
+AZURE_STORAGE_ACCOUNT_URL=https://<account>.blob.core.windows.net
+AZURE_STORAGE_SAS_TOKEN=<container-sas-token>
+SOURCE_CONTAINER_NAME=topic-content
+DESTINATION_CONTAINER_NAME=topic-content
+```
+
+Processing audio/video also requires Azure Speech and local FFmpeg/FFprobe.
+Keep SAS tokens, connection strings and API keys in your environment or secret
+store, not in version-controlled files. For Azure deployment, prefer managed
+identity and omit `AZURE_STORAGE_SAS_TOKEN`.
 
 ```bash
 akay-convert-to-markdown
@@ -178,37 +226,41 @@ exposed.
 
 ```json
 {
-  "documentId": "47cd79ca-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "contextId": "5af11f72-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "userId": "e0a01a4c-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "fileName": "tema-1.pdf",
-  "sourceBlobName": "5af11f72/.../47cd79ca/.../tema-1.pdf",
-  "callback": "subject-topic"
+  "requestId": "e0a01a4c-1234-4567-8901-123456789abc",
+  "source": {"type": "blob", "blobName": "subjects/3/topics/5/sources/550e8400-e29b-41d4-a716-446655440000.pdf"},
+  "destinationBlobName": "subjects/3/topics/5/content/550e8400-e29b-41d4-a716-446655440000.md",
+  "contentType": "document",
+  "overwriteDestination": true,
+  "callback": "topic-content",
+  "payload": {"topicContentId": 15, "topicId": 5, "userId": 1234}
 }
 ```
 
-`sourceBlobName` is required and locates the source content. An optional
-`contentType` (`document` | `audio` | `video`) overrides automatic detection,
-which otherwise resolves by file extension (there is no MIME type in the
-message, and content is never inferred from external URLs).
+`requestId` is a UUID identifying a client-issued request. Service Bus
+redeliveries keep the same ID; a new client-issued attempt gets a new ID.
+Only `source.type: "blob"` is supported. `source.blobName` identifies a blob in
+`SOURCE_CONTAINER_NAME`, and its extension determines the filename used for
+conversion. `destinationBlobName` is the complete blob name within
+`DESTINATION_CONTAINER_NAME`, chosen by the client.
 
-The source Blob path is taken from `sourceBlobName` and is never derived from
-`fileName`.
+`contentType` is optional (`document`, `audio`, or `video`); when omitted the
+type is inferred from the source filename. `payload` is an optional JSON object,
+defaulting to `{}`, returned without interpretation. `callback` selects a
+configured webhook URL. This contract replaces the previous `documentId`,
+`contextId`, `userId`, `fileName`, and `sourceBlobName` message fields;
+producers must migrate before using this version.
 
-`documentId`, `contextId` and `userId` each accept **either a JSON number
-(integer) or a UUID string**, independently. Integer ids are echoed back to the
-webhook as JSON numbers; UUID ids are echoed back as strings. Any other string
-value (including path-like values) is rejected as `INVALID_MESSAGE`.
+## Destination and retries
 
-## Output Blob structure
+`overwriteDestination` defaults to `false`. If the destination exists, the
+worker reuses it and sends a completed webhook. With `true`, it converts and
+overwrites the destination, including on redelivery. Concurrent requests with
+overwrite disabled use an atomic create: if another request writes first, its
+result is reused. Concurrent requests may still perform duplicate conversion.
 
-```text
-{contextId}/{documentId}/document.md
-```
-
-The same destination Blob is overwritten when a `documentId` is reprocessed. If
-the destination Markdown already exists, processing is skipped and the
-completed webhook is re-sent (idempotent at-least-once delivery).
+Clients should use the same destination for retries of the same source version,
+and distinct destinations for different source versions. An existing blob is
+reused without checking its origin; the client owns that association.
 
 ## Webhook contracts
 
@@ -221,39 +273,35 @@ The destination URL is resolved from the message's `callback` identifier via
 
 ```http
 POST {callback-resolved URL}
-X-Akay-Webhook-Key: <secret>
-Idempotency-Key: convert-to-markdown:{documentId}:completed
+X-Api-Key: <secret>
+Idempotency-Key: convert-to-markdown:{requestId}:completed
 ```
 
 ```json
 {
   "eventType": "document.conversion.completed",
-  "callback": "subject-topic",
-  "documentId": "...",
-  "contextId": "...",
-  "userId": "...",
-  "fileName": "tema-1.pdf",
-  "output": {
-    "containerName": "markdown",
-    "blobName": "5af11f72.../47cd79ca.../document.md"
-  }
+  "requestId": "f7fc711f-b8d5-4e20-94fd-c77c0472a1d1",
+  "source": {"type": "blob", "blobName": "uploads/lesson.pdf"},
+  "destinationBlobName": "456/123/version-1/document.md",
+  "contentType": "document",
+  "payload": {"documentId": 123, "contextId": 456, "userId": 789}
 }
 ```
 
 ### Failed
 
 ```http
-Idempotency-Key: convert-to-markdown:{documentId}:failed
+Idempotency-Key: convert-to-markdown:{requestId}:failed
 ```
 
 ```json
 {
   "eventType": "document.conversion.failed",
-  "callback": "subject-topic",
-  "documentId": "...",
-  "contextId": "...",
-  "userId": "...",
-  "fileName": "tema-1.pdf",
+  "requestId": "f7fc711f-b8d5-4e20-94fd-c77c0472a1d1",
+  "source": {"type": "blob", "blobName": "uploads/lesson.mp3"},
+  "destinationBlobName": "456/123/version-1/document.md",
+  "contentType": "audio",
+  "payload": {"documentId": 123, "contextId": 456, "userId": 789},
   "error": {
     "code": "SPEECH_TRANSCRIPTION_FAILED",
     "message": "Azure Speech returned status 500."
@@ -263,6 +311,9 @@ Idempotency-Key: convert-to-markdown:{documentId}:failed
 
 Stack traces and subprocess stdout/stderr are never exposed through the
 webhook; they may be written to application logs (bounded).
+For an invalid message, the failed webhook contains the recoverable fields
+only. It is sent only if a valid `requestId` and configured `callback` can be
+recovered.
 
 ## Error / retry semantics
 
@@ -282,11 +333,13 @@ webhook; they may be written to application logs (bounded).
   Normal client errors (400/401/403/404) are not retried.
 - Redelivery and dead-lettering are controlled by the queue's
   `MaxDeliveryCount`, not by application code.
-- Delivery is **at-least-once**; the pipeline is idempotent.
+- Delivery is **at-least-once**. Conversion and webhook notifications may be
+  repeated; `Idempotency-Key` provides correlation and does not enforce
+  deduplication.
 
 ## Logging
 
-Structured JSON logs allow tracing a conversion by `documentId`. The webhook
+Structured JSON logs allow tracing a conversion by `requestId`. The webhook
 API key, Azure credentials, speech key, and document/transcription contents are
 never logged. Subprocess stdout/stderr are logged bounded (`*_MAX_LOG_BYTES`).
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from collections.abc import Iterable, Mapping
 
 from azure.identity.aio import DefaultAzureCredential
 from azure.servicebus import ServiceBusReceivedMessage
@@ -30,6 +30,25 @@ from akay_convert_to_markdown.models.conversion_request import (
     recover_invalid_message_identity,
 )
 from akay_convert_to_markdown.processing.document_processor import DocumentProcessor
+
+
+def _normalize_body(body: object) -> str | bytes:
+    """Materialize transport data sections once, without decoding individual chunks."""
+    if isinstance(body, (str, bytes)):
+        return body
+    if not isinstance(body, Iterable) or isinstance(body, Mapping):
+        raise InvalidMessageError("Unsupported message body type.")
+    try:
+        chunks = []
+        for chunk in body:
+            if not isinstance(chunk, bytes):
+                raise InvalidMessageError("Message body sections must be bytes.")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except InvalidMessageError:
+        raise
+    except Exception as exc:
+        raise InvalidMessageError("Unable to read message body sections.") from exc
 
 
 class ServiceBusConsumer:
@@ -51,10 +70,13 @@ class ServiceBusConsumer:
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 
     async def run(self) -> None:
-        client = ServiceBusClient(
-            self._settings.servicebus_fully_qualified_namespace,
-            credential=self._credential,
-        )
+        if self._settings.servicebus_fully_qualified_namespace:
+            client = ServiceBusClient(
+                self._settings.servicebus_fully_qualified_namespace,
+                credential=self._credential,
+            )
+        else:
+            client = ServiceBusClient.from_connection_string(self._settings.servicebus_connection_string)
         async with client:
             receiver = client.get_queue_receiver(
                 self._settings.servicebus_queue_name,
@@ -90,9 +112,9 @@ class ServiceBusConsumer:
         renewer,
     ) -> None:
         delivery_count = message.delivery_count
-        raw: str | bytes = message.body
-
+        raw: str | bytes | None = None
         try:
+            raw = _normalize_body(message.body)
             request = parse_conversion_request(raw)
         except InvalidMessageError as exc:
             await self._handle_invalid_message(receiver, message, raw, exc, delivery_count)
@@ -100,9 +122,7 @@ class ServiceBusConsumer:
 
         request_log = context_logger(
             self._logger,
-            document_id=str(request.document_id),
-            context_id=str(request.context_id),
-            user_id=str(request.user_id),
+            request_id=str(request.request_id),
             file_name=request.file_name,
             callback=request.callback,
             delivery_count=delivery_count,
@@ -143,12 +163,12 @@ class ServiceBusConsumer:
         self,
         receiver: ServiceBusReceiver,
         message: ServiceBusReceivedMessage,
-        raw: str | bytes,
+        raw: str | bytes | None,
         exc: InvalidMessageError,
         delivery_count: int,
     ) -> None:
         log = context_logger(self._logger, delivery_count=delivery_count)
-        identity = recover_invalid_message_identity(raw)
+        identity = recover_invalid_message_identity(raw) if raw is not None else None
 
         if identity is None:
             log.error(
@@ -160,7 +180,7 @@ class ServiceBusConsumer:
 
         log = context_logger(
             self._logger,
-            document_id=identity["documentId"],
+            request_id=identity["requestId"],
             callback=identity.get("callback"),
             delivery_count=delivery_count,
         )

@@ -49,7 +49,7 @@ async def test_same_document_id_concurrent_runs_use_distinct_temp_dirs(tmp_path)
     assert len(converter.execution_dirs) == 2
     assert converter.execution_dirs[0] != converter.execution_dirs[1]
 
-    base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+    base = settings.temp_directory / str(request.request_id)
     assert not base.exists()
 
 
@@ -58,7 +58,7 @@ async def test_same_document_id_different_context_ids_are_independent(tmp_path):
     converter = RecordingConverter(delay=0.05)
     processor = _processor(settings, converter)
     request_a = make_request()
-    request_b = make_request(document_id=request_a.document_id)
+    request_b = make_request(destination_blob_name="other/document.md")
 
     await asyncio.gather(
         processor.process(request_a),
@@ -69,5 +69,5 @@ async def test_same_document_id_different_context_ids_are_independent(tmp_path):
     assert converter.execution_dirs[0] != converter.execution_dirs[1]
     # Neither context's base directory survives.
     for request in (request_a, request_b):
-        base = settings.temp_directory / str(request.context_id) / str(request.document_id)
+        base = settings.temp_directory / str(request.request_id)
         assert not base.exists()

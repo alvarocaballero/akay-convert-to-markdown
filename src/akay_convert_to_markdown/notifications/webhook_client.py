@@ -44,7 +44,7 @@ class WebhookClient:
 
         headers = {
             "Content-Type": "application/json",
-            "X-Akay-Webhook-Key": self._settings.webhook_api_key,
+            "X-Api-Key": self._settings.webhook_api_key,
             "Idempotency-Key": idempotency_key,
         }
 
