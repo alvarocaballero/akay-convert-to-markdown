@@ -406,7 +406,7 @@ async def test_client_authentication_and_context_closure(namespace, has_connecti
             factory.assert_not_called()
 
     client.get_queue_receiver.assert_called_once_with(settings.servicebus_queue_name,
-                                                      prefetch_count=settings.max_concurrent_jobs)
+                                                      prefetch_count=0)
     consumer._receive_loop.assert_awaited_once_with(receiver)
     receiver.__aexit__.assert_awaited_once()
     client.__aexit__.assert_awaited_once()

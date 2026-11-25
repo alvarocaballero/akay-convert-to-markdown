@@ -24,8 +24,11 @@ def build_transcription_markdown(result: TranscriptionResult) -> str:
         text = segment.text.strip()
         if not text:
             continue
-        lines.append(f"## [{format_timestamp(segment.start_seconds)}]")
-        lines.append("")
+        if segment.start_seconds is not None:
+            lines.append(f"## [{format_timestamp(segment.start_seconds)}]")
+            lines.append("")
         lines.append(text)
         lines.append("")
+    if not result.segments and result.text.strip():
+        lines.extend([result.text.strip(), ""])
     return "\n".join(lines).rstrip() + "\n"

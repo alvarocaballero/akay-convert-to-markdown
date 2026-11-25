@@ -15,8 +15,10 @@ import json
 from pathlib import Path
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from akay_convert_to_markdown.config.settings import Settings
+from akay_convert_to_markdown.config.settings import MediaSettings
+from akay_convert_to_markdown.contracts.artifacts import Warning
 from akay_convert_to_markdown.errors.exceptions import (
     InvalidMediaError,
     SpeechRateLimitedError,
@@ -27,10 +29,28 @@ from akay_convert_to_markdown.models.transcription import TranscriptionResult, T
 _TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
+class _Phrase(BaseModel):
+    """Only the pinned REST fields we consume; unrelated word/confidence data stays private."""
+
+    model_config = ConfigDict(strict=True)
+    text: str
+    offset: int | None = Field(default=None, alias="offsetMilliseconds", ge=0)
+    duration: int | None = Field(default=None, alias="durationMilliseconds", ge=0)
+    locale: str | None = Field(default=None, min_length=1, pattern=r"\S")
+    speaker: int | None = Field(default=None, ge=0)
+
+
+class _SpeechResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    duration: int | None = Field(default=None, alias="durationMilliseconds", ge=0)
+    phrases: list[_Phrase] = Field(default_factory=list)
+    combined: list[_Phrase] = Field(default_factory=list, alias="combinedPhrases")
+
+
 class FastTranscriptionService:
     """Fast Transcription REST client with a small transient-only retry policy."""
 
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(self, settings: MediaSettings, client: httpx.AsyncClient | None = None) -> None:
         self._settings = settings
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient()
@@ -65,7 +85,11 @@ class FastTranscriptionService:
                 last_error = exc
             else:
                 if response.status_code == 200:
-                    return self._parse(response.json())
+                    try:
+                        payload = response.json()
+                    except ValueError:
+                        raise SpeechTranscriptionError("Azure Speech returned an invalid JSON response.") from None
+                    return self._parse(payload)
                 if response.status_code == 400:
                     raise InvalidMediaError("Azure Speech rejected the audio as invalid media.")
                 if response.status_code in (401, 403):
@@ -86,26 +110,34 @@ class FastTranscriptionService:
 
         raise SpeechRateLimitedError("Azure Speech is temporarily unavailable.") from last_error
 
-    def _parse(self, payload: dict) -> TranscriptionResult:
-        if "phrases" not in payload and "combinedPhrases" not in payload:
-            raise SpeechTranscriptionError("Azure Speech returned an unexpected response.")
-
-        segments = [
-            TranscriptionSegment(
-                start_seconds=float(phrase.get("offsetMilliseconds", 0)) / 1000.0,
-                duration_seconds=float(phrase.get("durationMilliseconds", 0)) / 1000.0,
-                text=str(phrase.get("text") or ""),
-            )
-            for phrase in payload.get("phrases", [])
-            if phrase.get("text") is not None
-        ]
-
-        combined = payload.get("combinedPhrases") or []
-        text = " ".join(str(item.get("text") or "") for item in combined).strip()
-        if not text:
-            text = " ".join(segment.text for segment in segments).strip()
-
-        return TranscriptionResult(text=text, segments=segments)
+    @staticmethod
+    def _parse(payload: dict) -> TranscriptionResult:
+        try:
+            response = _SpeechResponse.model_validate(payload)
+            phrases = [phrase for phrase in response.phrases if phrase.text.strip()]
+            combined = [phrase for phrase in response.combined if phrase.text.strip()]
+            warnings = []
+            if phrases and combined:
+                phrase_text = " ".join(phrase.text for phrase in phrases).split()
+                combined_text = " ".join(phrase.text for phrase in combined).split()
+                if phrase_text != combined_text:
+                    warnings.append(Warning(code="SPEECH_COMBINED_TEXT_DIFFERS",
+                                            message="Combined text differs from phrase text; phrase content is retained in both artifacts."))
+            # Combined-only text has no measured phrase boundaries. Preserve it
+            # as untimed content instead of inventing a zero start/full-file end.
+            segments = [TranscriptionSegment(start_seconds=None if phrase.offset is None else phrase.offset / 1000,
+                                              duration_seconds=None if phrase.duration is None else phrase.duration / 1000,
+                                              text=phrase.text.strip(), language=phrase.locale,
+                                              speaker=None if phrase.speaker is None else str(phrase.speaker))
+                        for phrase in (phrases or combined)]
+            if not segments:
+                raise ValueError("No transcribed content.")
+            languages = {segment.language for segment in segments}
+            language = next(iter(languages)) if len(languages) == 1 else None
+            return TranscriptionResult(text=" ".join(segment.text for segment in segments), segments=segments,
+                                       duration_milliseconds=response.duration, language=language, warnings=warnings)
+        except (ValidationError, ValueError, OverflowError):
+            raise SpeechTranscriptionError("Azure Speech returned an invalid or unexpected transcription response.") from None
 
     async def aclose(self) -> None:
         if self._owns_client:

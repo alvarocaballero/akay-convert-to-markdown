@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from akay_convert_to_markdown.config.settings import Settings
+from akay_convert_to_markdown.config.settings import MediaSettings
 from akay_convert_to_markdown.errors.exceptions import FfmpegError, NoAudioTrackError
 from akay_convert_to_markdown.services.process_runner import (
     ProcessResult,
@@ -75,7 +75,7 @@ class FfmpegService:
 
     def __init__(
         self,
-        settings: Settings,
+        settings: MediaSettings,
         runner: Callable[..., object] = run_process,
     ) -> None:
         self._settings = settings

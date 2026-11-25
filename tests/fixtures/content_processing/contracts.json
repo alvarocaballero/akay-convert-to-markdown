@@ -1,0 +1,76 @@
+{
+  "document": {
+    "schemaVersion": 1,
+    "requestId": "b1ad362f-0911-4773-8651-1508d94ca001",
+    "contentKey": "manual:á|501",
+    "source": {"type": "blob", "blobName": "uploads/original.pdf"},
+    "destinationBlobName": "output/document.md",
+    "contentType": "document",
+    "documentOptions": {"extractSections": true, "codeEnrichment": false, "formulaEnrichment": true, "ocrLanguage": "es"},
+    "callback": "fixture-result",
+    "payload": {"opaque": [null, true, 1, 1.5, {"scopeKey": "not interpreted"}]}
+  },
+  "media": {
+    "schemaVersion": 1,
+    "requestId": "b1ad362f-0911-4773-8651-1508d94ca002",
+    "contentKey": "manual:media",
+    "source": {"type": "blob", "blobName": "uploads/original.mp4"},
+    "destinationBlobName": "output/transcript.md",
+    "contentType": "video",
+    "callback": "fixture-result",
+    "payload": {}
+  },
+  "index": {
+    "schemaVersion": 1,
+    "requestId": "b1ad362f-0911-4773-8651-1508d94ca003",
+    "operationSequence": 1,
+    "operation": "index",
+    "contentKey": "manual:media",
+    "scopeKey": "manuals:washer",
+    "source": {"type": "blob", "format": "transcript", "blobName": "output/transcript.artifacts/transcript.json"},
+    "sectionContext": {"mode": "fixed", "sectionId": "8af35178-a031-50c7-9c53-d77084e0c684", "headingPath": ["Safety", "Installation"]},
+    "indexProfile": {
+      "id": "fixture-only", "provider": "TestDouble", "model": "fixture-model",
+      "dimensions": 3, "tokenizer": "fixture-tokenizer", "maxChunkTokens": 16,
+      "distance": "Cosine", "collection": "fixture-collection"
+    },
+    "metadata": {"customerValue": 7},
+    "callback": "fixture-result",
+    "payload": {}
+  },
+  "delete": {
+    "schemaVersion": 1,
+    "requestId": "b1ad362f-0911-4773-8651-1508d94ca004",
+    "operationSequence": 2,
+    "operation": "delete",
+    "contentKey": "manual:media",
+    "scopeKey": "manuals:washer",
+    "indexTarget": {"profileId": "fixture-only", "collection": "fixture-collection"},
+    "callback": "fixture-result",
+    "payload": {}
+  },
+  "review": {
+    "schemaVersion": 1,
+    "contentKey": "manual:á|501",
+    "contentType": "document",
+    "source": {"type": "blob", "blobName": "uploads/original.pdf"},
+    "summary": {"pageCount": 1, "sectionCount": 1, "tableCount": 0, "imageCount": 1, "durationMilliseconds": null},
+    "sections": [{"id": "8af35178-a031-50c7-9c53-d77084e0c684", "parentId": null, "title": "Safety", "level": 1, "order": 0, "doclingItemRef": "#/texts/0", "pageNumber": 1}],
+    "tables": [],
+    "images": [{"id": "figure-001", "blobName": "output/document.artifacts/images/figure-001.png", "caption": null, "pageNumber": 1}],
+    "confidence": {"meanGrade": null, "lowGrade": null, "pages": [{"pageNumber": 1, "parseScore": 0.95, "parseGrade": "excellent"}]},
+    "warnings": [],
+    "processing": {"engine": "docling", "engineVersion": "2.141.0"}
+  },
+  "transcript": {
+    "schemaVersion": 1,
+    "contentKey": "manual:media",
+    "origin": {"type": "blob", "blobName": "uploads/original.mp4"},
+    "language": "en-US",
+    "durationMilliseconds": 18500,
+    "segments": [
+      {"id": "segment-0001", "startMilliseconds": 12000, "endMilliseconds": 18500, "speaker": null, "text": "Disconnect the power."},
+      {"id": "segment-0002", "startMilliseconds": null, "endMilliseconds": null, "speaker": null, "text": "Keep the manual."}
+    ]
+  }
+}

@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "contentKey": "topic-content:501",
+  "contentType": "document",
+  "source": { "type": "blob", "blobName": "topics/25/content/501/lesson.pdf" },
+  "summary": {
+    "pageCount": 3,
+    "sectionCount": 2,
+    "tableCount": 1,
+    "imageCount": 2,
+    "formulaCount": 2,
+    "durationMilliseconds": null
+  },
+  "sections": [
+    {
+      "id": "c1a3cc1f-4beb-5058-ba1e-51af764fccd7",
+      "parentId": null,
+      "title": "Fractions",
+      "level": 1,
+      "order": 0,
+      "doclingItemRef": "#/texts/0",
+      "pageNumber": 1
+    },
+    {
+      "id": "4c8d1f14-ffda-5b2e-9616-c7a4f82e34ef",
+      "parentId": "c1a3cc1f-4beb-5058-ba1e-51af764fccd7",
+      "title": "Simplifying",
+      "level": 2,
+      "order": 1,
+      "doclingItemRef": "#/texts/2",
+      "pageNumber": 2
+    }
+  ],
+  "tables": [
+    {
+      "id": "table-001",
+      "doclingItemRef": "#/tables/0",
+      "title": null,
+      "caption": null,
+      "pageNumber": 2,
+      "cells": [
+        {
+          "bbox": null, "row_span": 1, "col_span": 1,
+          "start_row_offset_idx": 0, "end_row_offset_idx": 1,
+          "start_col_offset_idx": 0, "end_col_offset_idx": 1,
+          "text": "Expression", "column_header": true,
+          "row_header": false, "row_section": false, "fillable": false
+        },
+        {
+          "bbox": null, "row_span": 1, "col_span": 1,
+          "start_row_offset_idx": 0, "end_row_offset_idx": 1,
+          "start_col_offset_idx": 1, "end_col_offset_idx": 2,
+          "text": "Value", "column_header": true,
+          "row_header": false, "row_section": false, "fillable": false
+        }
+      ],
+      "blobName": "topics/25/content/501/lesson.artifacts/images/table-001.png"
+    }
+  ],
+  "images": [
+    {
+      "id": "figure-001",
+      "blobName": "topics/25/content/501/lesson.artifacts/images/figure-001.png",
+      "caption": null,
+      "pageNumber": 3
+    },
+    {
+      "id": "table-001",
+      "blobName": "topics/25/content/501/lesson.artifacts/images/table-001.png",
+      "caption": null,
+      "pageNumber": 2
+    }
+  ],
+  "formulas": [
+    {
+      "id": "formula-001",
+      "doclingItemRef": "#/texts/4",
+      "sectionId": "4c8d1f14-ffda-5b2e-9616-c7a4f82e34ef",
+      "text": "a / b",
+      "latex": "\\frac{a}{b}",
+      "pageNumber": 2
+    },
+    {
+      "id": "formula-002",
+      "doclingItemRef": "#/texts/5",
+      "sectionId": "4c8d1f14-ffda-5b2e-9616-c7a4f82e34ef",
+      "text": "x plus unreadable glyph",
+      "latex": null,
+      "pageNumber": 3
+    }
+  ],
+  "confidence": {
+    "meanGrade": "fair",
+    "lowGrade": "fair",
+    "pages": [
+      {
+        "pageNumber": 1,
+        "layoutScore": 0.95, "layoutGrade": "excellent",
+        "ocrScore": 0.93, "ocrGrade": "excellent",
+        "parseScore": 0.94, "parseGrade": "excellent",
+        "tableScore": 0.9, "tableGrade": "excellent",
+        "meanScore": 0.93, "meanGrade": "excellent", "lowGrade": "excellent"
+      },
+      {
+        "pageNumber": 2,
+        "layoutScore": 0.82, "layoutGrade": "good",
+        "ocrScore": 0.61, "ocrGrade": "fair",
+        "parseScore": 0.7, "parseGrade": "fair",
+        "tableScore": 0.55, "tableGrade": "fair",
+        "meanScore": 0.6699999999999999, "meanGrade": "fair", "lowGrade": "fair"
+      },
+      {
+        "pageNumber": 3,
+        "layoutScore": 0.48, "layoutGrade": "poor",
+        "ocrScore": 0.32, "ocrGrade": "poor",
+        "parseScore": 0.4, "parseGrade": "poor",
+        "tableScore": null, "tableGrade": null,
+        "meanScore": 0.4000000000000001, "meanGrade": "poor", "lowGrade": "poor"
+      }
+    ]
+  },
+  "warnings": [],
+  "processing": { "operation": "convert", "engine": "docling", "engineVersion": "2.141.0" },
+  "youtube": null,
+  "extractionReviewBlobName": null
+}

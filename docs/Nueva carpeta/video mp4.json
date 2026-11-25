@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "contentKey": "topic-content:502",
+  "contentType": "video",
+  "source": { "type": "blob", "blobName": "topics/25/content/502/original.mp4" },
+  "summary": {
+    "pageCount": null,
+    "sectionCount": 0,
+    "tableCount": 0,
+    "imageCount": 0,
+    "formulaCount": 0,
+    "durationMilliseconds": 18500
+  },
+  "sections": [],
+  "tables": [],
+  "images": [],
+  "formulas": [],
+  "confidence": { "meanGrade": null, "lowGrade": null, "pages": [] },
+  "warnings": [],
+  "processing": {
+    "engine": "azure-speech-fast-transcription",
+    "engineVersion": "2025-10-15"
+  },
+  "youtube": null,
+  "extractionReviewBlobName": null
+}

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "pins": {"docling-slim": "2.141.0", "docling-core": "2.99.0", "rapidocr": "3.10.0", "onnxruntime": "1.20.1"},
+  "snapshots": {
+    "docling-project--docling-layout-heron": {"repository": "docling-project/docling-layout-heron", "revision": "8f39ad3c0b4c58e9c2d2c84a38465abf757272d8"},
+    "docling-project--docling-models": {"repository": "docling-project/docling-models", "revision": "fc0f2d45e2218ea24bce5045f58a389aed16dc23", "upstreamRef": "v2.3.0"},
+    "docling-project--CodeFormulaV2": {"repository": "docling-project/CodeFormulaV2", "revision": "ecedbe111d15c2dc60bfd4a823cbe80127b58af4"}
+  },
+  "ocrSource": "https://github.com/RapidAI/RapidOCR/blob/v3.10.0/python/rapidocr/default_models.yaml",
+  "languages": {
+    "es": {"recognizer": "es", "backbone": "PP-OCRv6", "resources": ["RapidOcr/PP-OCRv6_det_small.onnx", "RapidOcr/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "RapidOcr/PP-OCRv6_rec_small.onnx"], "quality": "measured-accent-errors"},
+    "eu": {"recognizer": "eu", "backbone": "PP-OCRv6", "resources": ["RapidOcr/PP-OCRv6_det_small.onnx", "RapidOcr/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "RapidOcr/PP-OCRv6_rec_small.onnx"], "quality": "not-measured"},
+    "gl": {"recognizer": "gl", "backbone": "PP-OCRv6", "resources": ["RapidOcr/PP-OCRv6_det_small.onnx", "RapidOcr/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "RapidOcr/PP-OCRv6_rec_small.onnx"], "quality": "not-measured"},
+    "ca": {"recognizer": "ca", "backbone": "PP-OCRv6", "resources": ["RapidOcr/PP-OCRv6_det_small.onnx", "RapidOcr/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "RapidOcr/PP-OCRv6_rec_small.onnx"], "quality": "not-measured"},
+    "fr": {"recognizer": "fr", "backbone": "PP-OCRv6", "resources": ["RapidOcr/PP-OCRv6_det_small.onnx", "RapidOcr/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "RapidOcr/PP-OCRv6_rec_small.onnx"], "quality": "not-measured"},
+    "en": {"recognizer": "en", "backbone": "PP-OCRv6", "resources": ["RapidOcr/PP-OCRv6_det_small.onnx", "RapidOcr/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "RapidOcr/PP-OCRv6_rec_small.onnx"], "quality": "not-measured"},
+    "de": {"recognizer": "de", "backbone": "PP-OCRv6", "resources": ["RapidOcr/PP-OCRv6_det_small.onnx", "RapidOcr/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "RapidOcr/PP-OCRv6_rec_small.onnx"], "quality": "not-measured"}
+  },
+  "files": [
+    {"path": "RapidOcr/PP-OCRv6_det_small.onnx", "bytes": 9929594, "sha256": "090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f"},
+    {"path": "RapidOcr/PP-OCRv6_rec_small.onnx", "bytes": 21234383, "sha256": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884"},
+    {"path": "RapidOcr/ch_ppocr_mobile_v2.0_cls_mobile.onnx", "bytes": 585532, "sha256": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c"},
+    {"path": "docling-project--CodeFormulaV2/added_tokens.json", "bytes": 975, "sha256": "002686b2efb9535c359458cd1121de8e1b58e67426a46e2bd4425843766a3a5e"},
+    {"path": "docling-project--CodeFormulaV2/chat_template.json", "bytes": 422, "sha256": "c9d21553af689882ac89ad8e8412164662d1605f6595119664e85626df7be421"},
+    {"path": "docling-project--CodeFormulaV2/config.json", "bytes": 2638, "sha256": "98f55cfe07dd168f9fab1f1eec35f754b23631ea1a9a7c9759b1b7cb41ab76b1"},
+    {"path": "docling-project--CodeFormulaV2/generation_config.json", "bytes": 169, "sha256": "b17f1890b2b2baf172761c9c4d6eb956482ffa05964f357e67544ec998c9851f"},
+    {"path": "docling-project--CodeFormulaV2/model.safetensors", "bytes": 630993616, "sha256": "4b04e77af34c4e682a7ab1617628340d658f3c3dcd12456dd2a7fff805cf79d2"},
+    {"path": "docling-project--CodeFormulaV2/preprocessor_config.json", "bytes": 486, "sha256": "6cb6e36d6fcb88ca1502c4a26750715dc3e7dedddc9a8f17b27d8d167d1457e7"},
+    {"path": "docling-project--CodeFormulaV2/processor_config.json", "bytes": 68, "sha256": "e7bff42da73ae9eec9042ef20e066e11f1ee20f025358ff79131e3c0fb549b46"},
+    {"path": "docling-project--CodeFormulaV2/special_tokens_map.json", "bytes": 1071, "sha256": "1b17e900a73384d256db6f1a7591fd0d95c09e6aede680022b047386b97afcba"},
+    {"path": "docling-project--CodeFormulaV2/tokenizer.json", "bytes": 7160031, "sha256": "5ec5d3780a2e01b140cf34f023eb600263855a99aacdc3eb0f2600d7b1b4ac96"},
+    {"path": "docling-project--CodeFormulaV2/tokenizer_config.json", "bytes": 24952, "sha256": "37a0e94be9c9ab5197b2188e61cf764bbc015f45261013881fe37bd2fe8599e6"},
+    {"path": "docling-project--CodeFormulaV2/vocab.json", "bytes": 1612747, "sha256": "8922f7e91084b9862d270c16ce1027071214aa252a1567a4b410f952101005fc"},
+    {"path": "docling-project--docling-layout-heron/config.json", "bytes": 3268, "sha256": "fdea30805ce2f5666b147fca941dcdd27ad468e27d6ed21902207d3da056a97d"},
+    {"path": "docling-project--docling-layout-heron/model.safetensors", "bytes": 171658996, "sha256": "00333a43451945aaf89db8ca9c0a17e75d1537c17db60fdb91aa95f4c7929e0c"},
+    {"path": "docling-project--docling-layout-heron/preprocessor_config.json", "bytes": 444, "sha256": "cd38cd59999e7a95d68e487fbe5132df3d4e5c32a0836add57e6126ba0c4eaf1"},
+    {"path": "docling-project--docling-models/model_artifacts/tableformer/accurate/tableformer_accurate.safetensors", "bytes": 212758388, "sha256": "2a7d6c924b3cd12fb99a09280ca9c33a89c5d60b93253617d2e088c1a40374d9"},
+    {"path": "docling-project--docling-models/model_artifacts/tableformer/accurate/tm_config.json", "bytes": 7060, "sha256": "984e122ceb8ccf84d84c9d2882f6f2302a44b4f1e577babd6289892c36f3cffd"}
+  ]
+}

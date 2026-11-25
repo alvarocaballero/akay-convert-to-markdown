@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "contentKey": "opaque:á",
+  "origin": {"type": "youtube", "url": "https://youtu.be/abcdefghijk"},
+  "language": "es-ES",
+  "durationMilliseconds": 10000,
+  "segments": [
+    {"id": "s1", "text": "Corrected first phrase.", "startMilliseconds": 1000, "endMilliseconds": 2500, "speaker": "0", "language": "es-ES"},
+    {"id": "s2", "text": "Corrected second phrase.", "startMilliseconds": 3000, "endMilliseconds": 6000}
+  ]
+}

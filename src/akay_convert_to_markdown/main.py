@@ -1,18 +1,12 @@
-"""Entry point for the Akay.ConvertToMarkdown worker."""
+"""Backward-compatible mixed worker; use dedicated queues for the new entries."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import signal
-from typing import Any
-
-from azure.identity.aio import DefaultAzureCredential
 
 from akay_convert_to_markdown.config.settings import Settings
-from akay_convert_to_markdown.conversion.markitdown_converter import MarkItDownDocumentConverter
-from akay_convert_to_markdown.logging import configure_logging
-from akay_convert_to_markdown.messaging.service_bus_consumer import ServiceBusConsumer
+from akay_convert_to_markdown.config.docling_settings import DoclingSettings
+from akay_convert_to_markdown.conversion.docling_converter import DoclingDocumentConverter
 from akay_convert_to_markdown.notifications.webhook_client import WebhookClient
 from akay_convert_to_markdown.processing.audio_processor import AudioProcessor
 from akay_convert_to_markdown.processing.document_processor import DocumentProcessor
@@ -20,25 +14,15 @@ from akay_convert_to_markdown.processing.video_processor import VideoProcessor
 from akay_convert_to_markdown.services.fast_transcription_service import FastTranscriptionService
 from akay_convert_to_markdown.services.ffmpeg_service import FfmpegService
 from akay_convert_to_markdown.storage.blob_storage import BlobStorage
+from akay_convert_to_markdown.worker_runtime import ProcessorResources, run_main
 
 
-def _build_credential(settings: Settings) -> DefaultAzureCredential:
-    kwargs: dict[str, Any] = {}
-    if settings.azure_client_id:
-        kwargs["managed_identity_client_id"] = settings.azure_client_id
-    return DefaultAzureCredential(**kwargs)
-
-
-async def _run(settings: Settings, logger: logging.Logger) -> None:
-    credential = _build_credential(settings)
-
-    storage = BlobStorage.from_settings(settings, credential)
-    converter = MarkItDownDocumentConverter()
-    webhook = WebhookClient(settings)
-
-    transcription = FastTranscriptionService(settings)
+def build_processor(settings: Settings, storage: BlobStorage, webhook: WebhookClient,
+                    logger: logging.Logger) -> ProcessorResources:
+    models = DoclingSettings()
+    converter = DoclingDocumentConverter(artifacts_path=models.artifacts_path)
     ffmpeg = FfmpegService(settings)
-
+    transcription = FastTranscriptionService(settings)
     processor = DocumentProcessor(
         settings,
         storage,
@@ -49,38 +33,11 @@ async def _run(settings: Settings, logger: logging.Logger) -> None:
         video_processor=VideoProcessor(settings, ffmpeg, transcription),
     )
 
-    stop_event = asyncio.Event()
-    consumer = ServiceBusConsumer(settings, processor, credential, logger, stop_event)
-
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, stop_event.set)
-        except (NotImplementedError, ValueError):
-            pass
-
-    async with credential:
-        try:
-            await consumer.run()
-        finally:
-            await transcription.aclose()
-            await webhook.aclose()
-            await storage.aclose()
+    return processor, transcription.aclose
 
 
 def main() -> int:
-    settings = Settings()  # fails fast when mandatory configuration is missing
-    configure_logging(settings.log_level)
-    logger = logging.getLogger("akay.convert_to_markdown")
-    logger.info("worker.starting", extra={"log_level": settings.log_level})
-
-    try:
-        asyncio.run(_run(settings, logger))
-    except KeyboardInterrupt:
-        pass
-
-    logger.info("worker.stopped")
-    return 0
+    return run_main(Settings(), build_processor, "akay.convert_to_markdown")
 
 
 if __name__ == "__main__":

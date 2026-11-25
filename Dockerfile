@@ -17,12 +17,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install runtime dependencies first so this layer is cached until
-# pyproject.toml changes; source-code edits only invalidate the app layer below.
+# N12 preserves this legacy mixed image using the union of the two converter
+# locks. N13 introduces the three independent images and model prefetching.
 COPY pyproject.toml README.md ./
-RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" > /tmp/requirements.txt \
-    && pip install --no-cache-dir -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
+COPY requirements/document-linux.txt requirements/media-linux.txt ./requirements/
+RUN pip install --no-cache-dir --require-hashes -r requirements/document-linux.txt -r requirements/media-linux.txt \
+    && pip check
 
 # Validate required external tools at build time (versions are surfaced so the
 # expected toolchain is explicit in the build log).

@@ -1,0 +1,15 @@
+# Preserve the numerical/native stack used in N3's offline inference evidence.
+# Constraints do not install foreign-worker packages. Direct pins live in pyproject.toml.
+numpy==2.5.3
+pillow==12.3.0
+pandas==3.1.1
+scipy==1.18.1
+opencv-python-headless==5.0.0.93
+accelerate==1.15.0
+huggingface-hub==1.33.0
+safetensors==0.8.0
+tokenizers==0.23.3
+python-docx==1.2.0
+python-pptx==1.0.2
+pypdfium2==5.15.2
+rtree==1.4.1

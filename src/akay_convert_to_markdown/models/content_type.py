@@ -1,7 +1,7 @@
 """Content type classification.
 
 Determines which processing strategy handles a request: ``Document`` (the
-MarkItDown path), ``Audio`` (Fast Transcription) or ``Video`` (FFmpeg audio
+Docling path), ``Audio`` (Fast Transcription) or ``Video`` (FFmpeg audio
 extraction + Fast Transcription).
 
 Detection is deliberately simple and deterministic, in this order:

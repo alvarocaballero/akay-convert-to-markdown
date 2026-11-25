@@ -1,0 +1,124 @@
+name: deploy-content-processing-worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Approved GitHub environment with explicit Azure and worker settings
+        type: environment
+        required: true
+      worker:
+        description: Apply exactly one worker from the complete release set
+        type: choice
+        options: [document, media, index]
+        required: true
+      release_sha:
+        description: Full commit SHA from the successful N14 publication
+        type: string
+        required: true
+      release_run_id:
+        description: Successful N14 workflow run ID in this repository
+        type: string
+        required: true
+      release_attempt:
+        description: Exact successful N14 run attempt
+        type: string
+        required: true
+      authorize:
+        description: Authorize Azure login and application of this worker configuration
+        type: boolean
+        default: false
+        required: true
+      cutover_confirmed:
+        description: Producers, old consumers, callbacks and rollback have been coordinated
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+# Serialize all environments/roles in this repository: app aliases must not race.
+concurrency:
+  group: content-processing-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.ref == 'refs/heads/main' && inputs.authorize && inputs.cutover_confirmed }}
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      AZURE_CORE_COLLECT_TELEMETRY: 'false'
+      AZURE_EXTENSION_USE_DYNAMIC_INSTALL: 'no'
+      DEPLOYMENT_ENABLED: ${{ vars.CONTENT_PROCESSING_DEPLOYMENT_ENABLED }}
+      WORKER: ${{ inputs.worker }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+      RELEASE_ATTEMPT: ${{ inputs.release_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.12'
+      - name: Require environment enablement and explicit identities before any login
+        env:
+          AZURE_CLIENT: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
+          AZURE_TENANT: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          test "$DEPLOYMENT_ENABLED" == 'true'
+          test -n "$AZURE_CLIENT" && test -n "$AZURE_TENANT" && test -n "$AZURE_SUBSCRIPTION"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$RELEASE_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+      - name: Obtain only the explicitly selected same-repository release artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_run_id }}
+          name: content-processing-${{ inputs.release_sha }}-${{ inputs.release_run_id }}-${{ inputs.release_attempt }}
+          path: .local/n15/download
+      - name: Verify publication lineage and prepare all three templates offline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_CONFIG: ${{ vars.CONTENT_PROCESSING_AZURE_CONFIG }}
+          AZURE_SUBSCRIPTION: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/attempts/$RELEASE_ATTEMPT" | python tools/container_apps.py prepare --config-json "$DEPLOYMENT_CONFIG" --release .local/n15/download/n14/release/release.json --sha "$RELEASE_SHA" --run-id "$RELEASE_RUN_ID" --attempt "$RELEASE_ATTEMPT" --output .local/n15/prepared
+          python -c 'import json,os; p=json.load(open(".local/n15/prepared/deployment-plan.json")); assert p["subscriptionId"] == os.environ["AZURE_SUBSCRIPTION"]'
+      - name: Explicit environment-scoped OIDC login
+        uses: azure/login@v2
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/content-processing-azure
+        with:
+          client-id: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Validate and apply only the selected existing app
+        uses: azure/cli@v2
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/content-processing-azure
+          AZURE_CORE_OUTPUT: none
+        with:
+          azcliversion: '2.81.0'
+          inlineScript: |
+            python3 tools/container_apps.py apply --directory .local/n15/prepared --worker "$WORKER" --deployment-enabled "$DEPLOYMENT_ENABLED" --cutover-confirmed --azure-config /root/.azure --apply
+      - name: Retain only prepared references and acknowledged application evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-${{ inputs.worker }}-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+          path: .local/n15/prepared/*.json

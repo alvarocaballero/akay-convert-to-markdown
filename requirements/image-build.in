@@ -1,0 +1,2 @@
+# Build-only dependencies; never copied into a worker's site-packages.
+hatchling==1.30.1

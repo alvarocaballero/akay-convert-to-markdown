@@ -1,7 +1,7 @@
 """Conversion abstraction.
 
-``MarkItDown`` stays behind this interface so another converter can replace it
-without changing the processing workflow.
+The document extraction engine stays behind this interface. Rich Docling
+extraction is available separately for the version-one artifact pipeline.
 """
 
 from __future__ import annotations

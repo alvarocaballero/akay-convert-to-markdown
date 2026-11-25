@@ -1,0 +1,13 @@
+{
+  "source": "https://download.pytorch.org/whl/cpu/",
+  "python": "3.12",
+  "architecture": "x86_64",
+  "windows": {
+    "torch": {"version": "2.15.0+cpu", "url": "https://download-r2.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-win_amd64.whl", "sha256": "5af9fb357790db09e62484b12032304f046c22c4b1895ca88c4cf5987ea369ca"},
+    "torchvision": {"version": "0.29.2+cpu", "url": "https://download-r2.pytorch.org/whl/cpu/torchvision-0.29.2%2Bcpu-py3-none-win_amd64.whl", "sha256": "84cb034b4ad99ccfda755270f6a7fff8a1c6694450e29880b99e4a60274e800b"}
+  },
+  "linux": {
+    "torch": {"version": "2.15.0+cpu", "url": "https://download-r2.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl", "sha256": "0955c7e3446326293f48af18fad67872fa31dee5a36a87690eb9e5be8b465be3"},
+    "torchvision": {"version": "0.29.2+cpu", "url": "https://download-r2.pytorch.org/whl/cpu/torchvision-0.29.2%2Bcpu-py3-none-manylinux_2_28_x86_64.whl", "sha256": "87631236a47be98ab21301e8cb4fc1cbb9325fe0aa7a022e18d2f894087b68c3"}
+  }
+}

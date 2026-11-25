@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from contextlib import suppress
+
+from akay_convert_to_markdown.processing.blocking import await_cleanup, drain_task
 
 
 class ProcessError(Exception):
@@ -48,22 +51,34 @@ async def run_process(
     externally supplied paths or URLs. Only the executable name is included.
     """
     executable = command[0] if command else "<unknown>"
-    process = await asyncio.create_subprocess_exec(
+    spawning = asyncio.create_task(asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-    )
+    ))
+    try:
+        process = await asyncio.shield(spawning)
+    except asyncio.CancelledError:
+        await drain_task(spawning)
+        if not spawning.cancelled() and spawning.exception() is None:
+            process = spawning.result()
+            with suppress(ProcessLookupError):
+                process.kill()
+            await await_cleanup(process.wait())
+        raise
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
     except asyncio.TimeoutError as exc:
-        process.kill()
-        await process.wait()
+        with suppress(ProcessLookupError):
+            process.kill()
+        await await_cleanup(process.wait())
         raise ProcessTimeoutError(
             f"{executable} timed out after {timeout_seconds}s."
         ) from exc
     except asyncio.CancelledError:
-        process.kill()
-        await process.wait()
+        with suppress(ProcessLookupError):
+            process.kill()
+        await await_cleanup(process.wait())
         raise
 
     return ProcessResult(

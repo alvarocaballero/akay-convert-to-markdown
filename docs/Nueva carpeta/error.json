@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "requestId": "8db8b749-d1b1-49ef-8431-db5ee9d003f6",
+  "contentKey": "topic-content:503",
+  "payload": {},
+  "error": {
+    "code": "DOCUMENT_CONVERSION_FAILED",
+    "message": "The document could not be converted completely."
+  },
+  "eventType": "document.conversion.failed",
+  "source": { "type": "blob", "blobName": "topics/25/content/503/broken.pdf" },
+  "destinationBlobName": "topics/25/content/503/broken.md",
+  "contentType": "document",
+  "operation": "convert"
+}

@@ -1,0 +1,86 @@
+{
+  "principal": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb001", "operation": "convert",
+    "contentKey": "fixture:principal", "source": {"type": "blob", "blobName": "principal/original.md"},
+    "destinationBlobName": "principal/extracted.md", "contentType": "document",
+    "documentOptions": {"extractSections": true, "codeEnrichment": false, "formulaEnrichment": false, "ocrLanguage": "es"},
+    "callback": "local", "payload": {"correlation": "principal"}
+  },
+  "additional": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb002", "operation": "convert",
+    "contentKey": "fixture:additional", "source": {"type": "blob", "blobName": "additional/original.md"},
+    "destinationBlobName": "additional/document.md", "contentType": "document",
+    "documentOptions": {"extractSections": false}, "callback": "local", "payload": {}
+  },
+  "rebuild": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb003", "operation": "rebuildFromMarkdown",
+    "contentKey": "fixture:principal", "source": {"type": "blob", "blobName": "principal/extracted.md"},
+    "contentType": "document",
+    "documentOptions": {"extractSections": true}, "callback": "local", "payload": {"correlation": "approval-fixture"}
+  },
+  "audio": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb004", "contentKey": "fixture:audio",
+    "source": {"type": "blob", "blobName": "media/original.mp3"}, "destinationBlobName": "media/audio.md",
+    "contentType": "audio", "callback": "local", "payload": {}
+  },
+  "video": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb005", "contentKey": "fixture:video",
+    "source": {"type": "blob", "blobName": "media/original.webm"}, "destinationBlobName": "media/video.md",
+    "contentType": "video", "callback": "local", "payload": {}
+  },
+  "youtube": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb006", "contentKey": "fixture:youtube",
+    "source": {"type": "youtube", "url": "https://youtu.be/abcdefghijk"}, "destinationBlobName": "media/youtube.md",
+    "contentType": "video", "callback": "local", "payload": {}
+  },
+  "indexPrincipal": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb007", "operationSequence": 1, "operation": "index",
+    "contentKey": "fixture:principal", "scopeKey": "fixture:scope",
+    "source": {"type": "blob", "format": "docling", "blobName": "principal/extracted.artifacts/document.docling.json"},
+    "sectionContext": {"mode": "fromReview", "reviewBlobName": "principal/extracted.artifacts/review.json"},
+    "indexProfile": {"id": "n16-fixture", "provider": "AzureOpenAI", "model": "text-embedding-3-small",
+      "deployment": "n16-fixture-deployment", "dimensions": 1536, "tokenizer": "cl100k_base", "maxChunkTokens": 600,
+      "distance": "Cosine", "collection": "n16-fixture"},
+    "metadata": {"fixture": true}, "callback": "local", "payload": {}
+  },
+  "indexAdditional": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb008", "operationSequence": 1, "operation": "index",
+    "contentKey": "fixture:additional", "scopeKey": "fixture:scope",
+    "source": {"type": "blob", "format": "docling", "blobName": "additional/document.artifacts/document.docling.json"},
+    "sectionContext": {"mode": "fixed", "sectionId": "8af35178-a031-50c7-9c53-d77084e0c684", "headingPath": ["Corrected principal"]},
+    "indexProfile": {"id": "n16-fixture", "provider": "AzureOpenAI", "model": "text-embedding-3-small",
+      "deployment": "n16-fixture-deployment", "dimensions": 1536, "tokenizer": "cl100k_base", "maxChunkTokens": 600,
+      "distance": "Cosine", "collection": "n16-fixture"},
+    "metadata": {"fixture": true}, "callback": "local", "payload": {}
+  },
+  "indexTranscript": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb009", "operationSequence": 1, "operation": "index",
+    "contentKey": "fixture:audio", "scopeKey": "fixture:scope",
+    "source": {"type": "blob", "format": "transcript", "blobName": "media/corrected/transcript.json"},
+    "sectionContext": {"mode": "fixed", "sectionId": "8af35178-a031-50c7-9c53-d77084e0c684", "headingPath": ["Corrected principal"]},
+    "indexProfile": {"id": "n16-fixture", "provider": "AzureOpenAI", "model": "text-embedding-3-small",
+      "deployment": "n16-fixture-deployment", "dimensions": 1536, "tokenizer": "cl100k_base", "maxChunkTokens": 600,
+      "distance": "Cosine", "collection": "n16-fixture"},
+    "metadata": {"fixture": true}, "callback": "local", "payload": {}
+  },
+  "deletePrincipal": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb010", "operationSequence": 2, "operation": "delete",
+    "contentKey": "fixture:principal", "scopeKey": "fixture:scope",
+    "indexTarget": {"profileId": "n16-fixture", "collection": "n16-fixture"}, "callback": "local", "payload": {}
+  },
+  "deleteTranscript": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb011", "operationSequence": 2, "operation": "delete",
+    "contentKey": "fixture:audio", "scopeKey": "fixture:scope",
+    "indexTarget": {"profileId": "n16-fixture", "collection": "n16-fixture"}, "callback": "local", "payload": {}
+  },
+  "reassign": {
+    "schemaVersion": 1, "requestId": "b1ad362f-0911-4773-8651-1508d94cb012", "operationSequence": 3, "operation": "index",
+    "contentKey": "fixture:audio", "scopeKey": "fixture:scope",
+    "source": {"type": "blob", "format": "transcript", "blobName": "media/corrected/transcript.json"},
+    "sectionContext": {"mode": "fixed", "sectionId": "7172ce0f-1a0b-5376-a8ed-871bbb1227fc", "headingPath": ["Reassigned fixture"]},
+    "indexProfile": {"id": "n16-fixture", "provider": "AzureOpenAI", "model": "text-embedding-3-small",
+      "deployment": "n16-fixture-deployment", "dimensions": 1536, "tokenizer": "cl100k_base", "maxChunkTokens": 600,
+      "distance": "Cosine", "collection": "n16-fixture"},
+    "metadata": {"fixture": true}, "callback": "local", "payload": {}
+  }
+}

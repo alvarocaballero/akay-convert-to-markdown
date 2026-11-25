@@ -7,10 +7,10 @@ from typing import Any
 
 import httpx
 
-from akay_convert_to_markdown.config.settings import Settings
+from akay_convert_to_markdown.config.settings import CommonSettings
 from akay_convert_to_markdown.errors.exceptions import CallbackNotConfiguredError, WebhookError
 
-_TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+_TRANSIENT_STATUS_CODES = {408, 429}
 
 
 class WebhookClient:
@@ -23,7 +23,7 @@ class WebhookClient:
     mapping; Service Bus messages never supply a URL.
     """
 
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(self, settings: CommonSettings, client: httpx.AsyncClient | None = None) -> None:
         self._settings = settings
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient()
@@ -62,7 +62,7 @@ class WebhookClient:
             else:
                 if 200 <= response.status_code < 300:
                     return
-                if response.status_code in _TRANSIENT_STATUS_CODES:
+                if response.status_code in _TRANSIENT_STATUS_CODES or 500 <= response.status_code <= 599:
                     last_error = WebhookError(f"Webhook returned transient status {response.status_code}.")
                 else:
                     raise WebhookError(f"Webhook returned {response.status_code}.")

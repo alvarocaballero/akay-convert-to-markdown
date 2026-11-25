@@ -7,7 +7,7 @@ to the correct settlement call.
 
 It detects the content type and dispatches to the matching strategy:
 
-* ``Document`` -> MarkItDown;
+* ``Document`` -> Docling;
 * ``Audio``    -> Azure Fast Transcription;
 * ``Video``    -> FFmpeg audio extraction + Fast Transcription.
 
@@ -22,9 +22,10 @@ import logging
 import shutil
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from akay_convert_to_markdown.config.settings import Settings
+from akay_convert_to_markdown.config.settings import ConversionSettings
 from akay_convert_to_markdown.conversion.document_converter import DocumentConverter
 from akay_convert_to_markdown.errors.exceptions import (
     DocumentTooLargeError,
@@ -38,9 +39,12 @@ from akay_convert_to_markdown.models.content_type import ContentType, detect_con
 from akay_convert_to_markdown.models.conversion_request import ConversionRequest, validate_extension
 from akay_convert_to_markdown.models.conversion_result import ProcessingResult
 from akay_convert_to_markdown.notifications.webhook_client import WebhookClient
-from akay_convert_to_markdown.processing.audio_processor import AudioProcessor
-from akay_convert_to_markdown.processing.video_processor import VideoProcessor
 from akay_convert_to_markdown.storage.blob_storage import BlobStorage
+from akay_convert_to_markdown.processing.blocking import drain_on_cancel
+
+if TYPE_CHECKING:
+    from akay_convert_to_markdown.processing.audio_processor import AudioProcessor
+    from akay_convert_to_markdown.processing.video_processor import VideoProcessor
 
 
 def _elapsed_ms(started: float) -> int:
@@ -53,7 +57,7 @@ def safe_source_filename(file_name: str) -> str:
     Strips any directory components (POSIX and Windows separators) and rejects
     unusable basenames so the result can never resolve to ``.``, ``..``, a
     parent directory or an absolute path. The extension is preserved so
-    MarkItDown can infer the document type.
+    the document adapter can select the document type.
     """
     name = file_name.replace("\\", "/").rstrip("/").split("/")[-1]
     if name in ("", ".", ".."):
@@ -66,14 +70,15 @@ class DocumentProcessor:
 
     def __init__(
         self,
-        settings: Settings,
+        settings: ConversionSettings,
         storage: BlobStorage,
-        converter: DocumentConverter,
+        converter: DocumentConverter | None,
         webhook: WebhookClient,
         logger: logging.Logger,
         *,
         audio_processor: AudioProcessor | None = None,
         video_processor: VideoProcessor | None = None,
+        allowed_content_types: frozenset[ContentType] = frozenset(ContentType),
     ) -> None:
         self._settings = settings
         self._storage = storage
@@ -82,6 +87,7 @@ class DocumentProcessor:
         self._logger = logger
         self._audio_processor = audio_processor
         self._video_processor = video_processor
+        self._allowed_content_types = allowed_content_types
 
     async def process(self, request: ConversionRequest) -> ProcessingResult:
         log = context_logger(
@@ -112,6 +118,7 @@ class DocumentProcessor:
 
             execution_dir.mkdir(parents=True, exist_ok=False)
             await self._convert_with_timeout(request, content_type, execution_dir, log)
+            await self._send_completed_webhook(request, log)
 
             log.info(
                 "document.processing.completed",
@@ -124,7 +131,6 @@ class DocumentProcessor:
                 extra={
                     "error_code": exc.code,
                     "duration_ms": _elapsed_ms(started),
-                    "detail": exc.detail,
                 },
             )
             await self._send_failed_webhook(request, exc, log)
@@ -163,7 +169,7 @@ class DocumentProcessor:
                     break
                 parent = parent.parent
 
-        await asyncio.to_thread(_remove)
+        await drain_on_cancel(_remove)
 
     async def _convert_with_timeout(
         self,
@@ -191,7 +197,6 @@ class DocumentProcessor:
     ) -> None:
         markdown = await self._to_markdown(request, content_type, execution_dir, log)
         await self._upload(request, markdown, execution_dir, log)
-        await self._send_completed_webhook(request, log)
 
     async def _to_markdown(
         self,
@@ -240,6 +245,8 @@ class DocumentProcessor:
     async def _convert(self, request: ConversionRequest, source_path: Path, log: logging.LoggerAdapter) -> str:
         log.info("document.conversion.started")
         started = time.perf_counter()
+        if self._converter is None:
+            raise UnsupportedContentTypeError("Document processing is not available.")
         markdown = await self._converter.convert(source_path)
         log.info("document.conversion.completed", extra={"duration_ms": _elapsed_ms(started)})
         return markdown
@@ -253,7 +260,7 @@ class DocumentProcessor:
     ) -> None:
         started = time.perf_counter()
         output_path = execution_dir / "document.md"
-        await asyncio.to_thread(output_path.write_text, markdown, encoding="utf-8")
+        await drain_on_cancel(lambda: output_path.write_text(markdown, encoding="utf-8"))
         blob_name = self._output_blob_name(request)
         await self._storage.upload_file(self._settings.destination_container_name, blob_name, output_path,
                                         overwrite=request.overwrite_destination)
@@ -316,7 +323,7 @@ class DocumentProcessor:
             "eventType": "document.conversion.failed",
             "requestId": identity["requestId"],
         }
-        for field in ("source", "destinationBlobName", "contentType", "payload"):
+        for field in ("source", "destinationBlobName", "contentType", "payload", "operation"):
             if identity.get(field) is not None:
                 payload[field] = identity[field]
         payload["error"] = {
@@ -347,6 +354,8 @@ class DocumentProcessor:
         )
 
     def _validate_input(self, request: ConversionRequest, content_type: ContentType) -> None:
+        if content_type not in self._allowed_content_types:
+            raise UnsupportedContentTypeError("Content type is not supported by this worker.")
         if content_type is ContentType.DOCUMENT:
             validate_extension(request.file_name)
 

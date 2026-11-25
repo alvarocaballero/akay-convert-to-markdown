@@ -13,3 +13,10 @@ build/
 .vscode/
 *.log
 specs/
+/.local/docling-n3/
+/.local/cl100k_base.tiktoken
+/.local/n12/
+/.local/n13/
+/.local/n14/
+/.local/n15/
+/.local/n16/

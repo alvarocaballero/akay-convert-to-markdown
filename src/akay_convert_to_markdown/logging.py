@@ -20,6 +20,7 @@ _LOG_FIELDS = (
     "attempt",
     "status_code",
     "error_code",
+    "error_type",
     "idempotency_key",
     "blob_name",
     "reason",

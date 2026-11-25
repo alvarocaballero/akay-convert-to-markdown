@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.30.1"]
 build-backend = "hatchling.build"
 
 [project]
@@ -10,24 +10,62 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "Proprietary" }
 dependencies = [
-    "markitdown[pdf,docx,pptx]==0.1.1",
     "azure-identity==1.20.0",
     "azure-servicebus==7.14.0",
     "azure-storage-blob[aio]==12.24.1",
-    "httpx==0.27.2",
+    "httpx==0.28.1",
     "pydantic==2.10.4",
-    "pydantic-settings==2.7.1",
+    "pydantic-settings==2.14.0",
 ]
 
 [project.optional-dependencies]
+document = [
+    "docling-slim[extract-core,format-pdf,models-local,feat-ocr-rapidocr-onnx,format-docx,format-pptx,format-html,format-markdown]==2.141.0",
+    "docling-core==2.99.0",
+    "docling-parse==7.26.0",
+    "rapidocr==3.10.0",
+    "onnxruntime==1.20.1",
+    "marko==2.2.5",
+    "docling-ibm-models==4.0.4",
+    "torch==2.15.0",
+    "torchvision==0.29.2",
+    "transformers==5.23.0",
+]
+media = [
+    "yt-dlp==2025.11.12",
+    "yt-dlp-ejs==0.3.1",
+    "deno==2.5.6",
+]
+index = [
+    "docling-core[chunking-openai]==2.99.0",
+    "semchunk==3.2.5",
+    # Core 2.99 imports this module even when its HuggingFace tokenizer is unused.
+    "huggingface-hub==1.33.0",
+    "qdrant-client==1.19.1",
+    "tiktoken==0.12.0",
+]
+youtube = [
+    "yt-dlp==2025.11.12",
+    "yt-dlp-ejs==0.3.1",
+    "deno==2.5.6",
+]
 test = [
+    "qdrant-client==1.19.1",
+    "tiktoken==0.12.0",
     "pytest==8.3.4",
     "pytest-asyncio==0.25.0",
     "pytest-cov==6.0.0",
+    # Retained for compatibility; full development also selects document/media/index.
+    "yt-dlp==2025.11.12",
+    "yt-dlp-ejs==0.3.1",
+    "deno==2.5.6",
 ]
 
 [project.scripts]
 akay-convert-to-markdown = "akay_convert_to_markdown.main:main"
+akay-convert-document = "akay_convert_to_markdown.document_main:main"
+akay-transcribe-media = "akay_convert_to_markdown.media_main:main"
+akay-index-content = "akay_convert_to_markdown.index_main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/akay_convert_to_markdown"]

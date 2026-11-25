@@ -1,0 +1,56 @@
+Implement the next pending task from the content-processing implementation plan.
+
+Repository:
+C:\Develop\Akay\Akay.ConvertToMarkdown
+
+Authoritative specification:
+C:\Develop\Akay\Akay.ConvertToMarkdown\docs\content-processing-specification.md
+
+Implementation plan:
+C:\Develop\Akay\Akay.ConvertToMarkdown\docs\docling-rag-implementation-plan.md
+
+1. Read the applicable repository instructions, current README, both documents,
+   git status and any existing implementation progress record.
+
+2. Identify the first incomplete task in dependency order, starting with N0.
+   Confirm completion from actual code and recorded verification, not checkboxes
+   alone. Reuse compatible existing work; do not restart the implementation.
+   State which task you will execute and its prerequisites, then proceed.
+
+3. Execute ONLY that task. Do not implement an entire phase or advance to another
+   task during this session. Follow the specification as the target architecture;
+   treat the README as documentation of the current implementation.
+
+4. Keep changes scoped to ConvertToMarkdown and the assigned task, including its
+   tests, documentation and relevant CI/container configuration. Do not modify
+   Akay.Be, other repositories or databases. Do not create migrations.
+
+5. Preserve existing compatible functionality. Do not replace working code with
+   a generic framework or introduce requirements absent from the specification.
+   Verify library APIs against the pinned versions and official documentation.
+
+6. For deterministic behavior changes, demonstrate a failing focused test before
+   implementation, then make it pass and run the applicable regression tests.
+   If a meaningful test cannot run, explain why and record the missing evidence.
+   Use mocks or local fixtures for external services.
+
+7. Prepare Docker and CI/CD changes when their tasks require them, but do not
+   push, publish images, create cloud resources, deploy, or call live services
+   without explicit authorization. Do not discover or reuse ambient credentials.
+
+8. Ask one focused question and stop only if an essential unresolved decision
+   blocks this task. Do not invent embedding models, deployment settings or
+   credentials. Record unrelated missing configuration without blocking safe work.
+
+9. Update the repository's persistent progress record following its instructions.
+   Record the task ID, status, decisions, changed files, exact checks and results,
+   pending work and the next task. Mark complete only after verifying acceptance
+   criteria. Preserve existing progress and unrelated user changes.
+
+Finish with a concise Spanish summary:
+- Task executed and outcome.
+- Changes made.
+- Verification results and any pending checks.
+- Next task to execute in a fresh session.
+
+Stop after that summary.

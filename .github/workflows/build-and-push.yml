@@ -1,66 +1,109 @@
-name: build-and-push-image
+name: content-processing-ci
 
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Authorize publication of the three tested images to configured GHCR repositories
+        type: boolean
+        default: false
+        required: true
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+
+# No semver read/increment/tag race; each run attempt has a unique SHA identity.
+concurrency:
+  group: content-processing-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUN_AZURE_INTEGRATION_TESTS: 'false'
+  RUN_DOCLING_MODEL_TESTS: 'false'
+  RUN_DOCLING_QUALITY_DIAGNOSTICS: 'false'
+  PIP_CONFIG_FILE: /dev/null
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: Determine version
-        id: version
+          persist-credentials: false
+      - name: Validate workflow syntax and embedded shell
+        run: docker run --rm --network none --mount "type=bind,source=$PWD/.github/workflows,target=/workflows,readonly" rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 /workflows/build-and-push.yml /workflows/deploy-workers.yml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.12'
+      - name: Install locked engines and test tooling
         run: |
-          set -euo pipefail
-          latest_tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
-          if [ -z "$latest_tag" ]; then
-            version="1.0.1"
-          else
-            cleaned="${latest_tag#v}"
-            major="${cleaned%%.*}"
-            rest="${cleaned#*.}"
-            minor="${rest%%.*}"
-            patch="${rest#*.}"
-            version="$major.$minor.$((patch + 1))"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: $version"
-
-      - name: Tag release
+          python -m pip install --index-url https://pypi.org/simple --require-hashes -r requirements/document-linux.txt -r requirements/media-linux.txt -r requirements/index-linux.txt -r requirements/image-build-linux.txt
+          python -m pip install --index-url https://pypi.org/simple --no-build-isolation -e '.[test]'
+          python -m pip check
+      - name: Test offline behavior and pinned API seams
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
+          python -m pytest -q
+          python docs/checks/content_processing_n0_probe.py
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
+  images:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.12'
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+          version: v0.38.1
+      - name: Cache only public locked model and tokenizer bytes
+        uses: actions/cache@v4
+        with:
+          path: .local/n14/assets
+          key: public-assets-${{ runner.os }}-${{ hashFiles('requirements/document-models.json', 'requirements/index-tokenizer.json', 'tools/ci_assets.py') }}
+      - name: Prepare and verify exact public build inputs
+        run: python tools/ci_assets.py --directory .local/n14/assets --download-public-assets
+      - name: Build all three images and run every offline smoke phase
+        run: |
+          python tools/check_images.py --docker-host unix:///var/run/docker.sock --buildx-plugin "$HOME/.docker/cli-plugins/docker-buildx" --document-models .local/n14/assets/document --tokenizer-file .local/n14/assets/tokenizer/cl100k_base.tiktoken
+          python tools/ci_release.py --evidence-root .local/n13 --output .local/n14/release --sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Log in to GHCR only for an explicitly authorized publication
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && vars.GHCR_PUBLICATION_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
         uses: docker/login-action@v3
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/ghcr-publication
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push image
-        uses: docker/build-push-action@v6
+      - name: Publish the tested IDs and record the complete digest set
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && vars.GHCR_PUBLICATION_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+        env:
+          GHCR_IMAGE_REPOSITORIES: ${{ vars.GHCR_IMAGE_REPOSITORIES }}
+        run: |
+          python tools/ci_release.py --evidence-root .local/n13 --output .local/n14/release --sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --repositories-json "$GHCR_IMAGE_REPOSITORIES" --docker-host unix:///var/run/docker.sock --docker-config "$RUNNER_TEMP/ghcr-publication" --publish
+      - name: Retain only smoke logs, measurements and release records
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
         with:
-          context: .
-          push: true
-          platforms: linux/amd64
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          name: content-processing-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            .local/n13/run-*/results.json
+            .local/n13/run-*/commands.jsonl
+            .local/n13/run-*/*.log
+            .local/n14/release/*.json

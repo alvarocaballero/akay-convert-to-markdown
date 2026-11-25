@@ -12,6 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 from akay_convert_to_markdown.errors.exceptions import InvalidMessageError, UnsupportedDocumentTypeError
 
 SUPPORTED_EXTENSIONS = frozenset({".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md"})
+VERSIONED_FIELDS = frozenset({"schemaVersion", "contentKey", "documentOptions", "operation", "operationSequence", "scopeKey",
+                              "schema_version", "content_key", "document_options", "operation_sequence", "scope_key",
+                              "extractionReviewBlobName", "extraction_review_blob_name"})
 
 
 class BlobSource(BaseModel):
@@ -42,6 +45,10 @@ def parse_conversion_request(raw: str | bytes) -> ConversionRequest:
         data = json.loads(raw)
         if not isinstance(data, dict):
             raise ValueError("Message body must be a JSON object")
+        # Never downgrade version-one jobs to Markdown-only legacy processing.
+        # The new contract is activated by each artifact-capable worker task.
+        if VERSIONED_FIELDS.intersection(data):
+            raise ValueError("Versioned content-processing contracts require an artifact-capable worker.")
         return ConversionRequest.model_validate(data)
     except (UnicodeDecodeError, json.JSONDecodeError, ValidationError, ValueError, TypeError) as exc:
         raise InvalidMessageError("Message has missing or invalid required fields.") from exc
@@ -67,4 +74,8 @@ def recover_invalid_message_identity(raw: str | bytes) -> dict | None:
     for field in ("callback", "source", "destinationBlobName", "contentType", "payload"):
         if field in data:
             identity[field] = data[field]
+    if data.get("schemaVersion") == 1 and data.get("contentType") == "document":
+        operation = data.get("operation", "convert")
+        if operation in ("convert", "rebuildFromMarkdown"):
+            identity["operation"] = operation
     return identity

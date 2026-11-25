@@ -1,0 +1,17 @@
+# Allowlist the legacy and dedicated build inputs; local assets use named contexts.
+**
+!Dockerfile
+!Dockerfile.workers
+!.dockerignore
+!pyproject.toml
+!README.md
+!src/
+!src/**
+!requirements/
+!requirements/*-linux.txt
+!requirements/document-models.json
+!requirements/index-tokenizer.json
+!tools/
+!tools/verify_assets.py
+**/__pycache__/
+**/*.pyc

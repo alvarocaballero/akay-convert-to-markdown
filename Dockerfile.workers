@@ -1,0 +1,74 @@
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+# Linux/amd64 only: N12 locks include exact CPU wheel URLs for this platform.
+FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS base
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_CONFIG_FILE=/dev/null \
+    TEMP_DIRECTORY=/tmp/akay TMPDIR=/tmp/akay HOME=/tmp/akay \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HOME=/tmp/akay/huggingface \
+    XDG_CACHE_HOME=/tmp/akay/cache OMP_NUM_THREADS=2
+WORKDIR /app
+RUN groupadd --gid 10001 appuser && useradd --uid 10001 --gid 10001 --no-create-home appuser \
+    && mkdir -p /tmp/akay && chown 10001:10001 /tmp/akay && chmod 700 /tmp/akay
+
+FROM base AS wheel
+COPY requirements/image-build-linux.txt /build/requirements.txt
+RUN pip install --index-url https://pypi.org/simple --require-hashes -r /build/requirements.txt
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip wheel --no-deps --no-build-isolation --wheel-dir /wheels .
+
+FROM base AS document-deps
+COPY requirements/document-linux.txt /build/requirements.txt
+RUN pip install --index-url https://pypi.org/simple --require-hashes -r /build/requirements.txt
+COPY --from=wheel /wheels /wheels
+RUN pip install --no-deps /wheels/*.whl && pip check && rm -rf /wheels /build
+# PDF base-font substitution must be available to the native Linux renderer.
+RUN rm /etc/apt/sources.list.d/debian.sources \
+    && printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261110T000000Z bookworm main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261110T000000Z bookworm-security main\n' > /etc/apt/sources.list \
+    && apt-get update && apt-get install -y --no-install-recommends fonts-liberation2 fontconfig \
+    && rm -rf /var/lib/apt/lists/*
+FROM base AS media-deps
+# Freeze the Debian repository as well as the Python locks/base digest.
+RUN rm /etc/apt/sources.list.d/debian.sources \
+    && printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261110T000000Z bookworm main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261110T000000Z bookworm-security main\n' > /etc/apt/sources.list \
+    && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && ffmpeg -version && ffprobe -version && rm -rf /var/lib/apt/lists/*
+COPY requirements/media-linux.txt /build/requirements.txt
+RUN pip install --index-url https://pypi.org/simple --require-hashes -r /build/requirements.txt
+COPY --from=wheel /wheels /wheels
+RUN pip install --no-deps /wheels/*.whl && pip check && rm -rf /wheels /build
+
+FROM base AS index-deps
+COPY requirements/index-linux.txt /build/requirements.txt
+RUN pip install --index-url https://pypi.org/simple --require-hashes -r /build/requirements.txt
+COPY --from=wheel /wheels /wheels
+RUN pip install --no-deps /wheels/*.whl && pip check && rm -rf /wheels /build
+
+FROM base AS verified-document-assets
+COPY --from=document_assets / /opt/docling/models/
+COPY requirements/document-models.json /app/requirements/document-models.json
+COPY tools/verify_assets.py /app/tools/verify_assets.py
+RUN python tools/verify_assets.py --document-dir /opt/docling/models \
+    && chmod -R a=rX /opt/docling /app
+
+FROM document-deps AS document-converter
+COPY --from=verified-document-assets /opt/docling /opt/docling
+COPY --from=verified-document-assets /app/requirements /app/requirements
+ENV DOCLING_ARTIFACTS_PATH=/opt/docling/models
+USER 10001:10001
+ENTRYPOINT ["akay-convert-document"]
+
+FROM media-deps AS media-transcriber
+# The pinned PyPI Deno wheel installs its Linux executable with mode 0644.
+RUN chmod 755 /usr/local/bin/deno && deno --version
+USER 10001:10001
+ENTRYPOINT ["akay-transcribe-media"]
+
+FROM index-deps AS content-indexer
+COPY --from=tokenizer_assets / /opt/tokenizers/
+COPY requirements/index-tokenizer.json /app/requirements/index-tokenizer.json
+COPY tools/verify_assets.py /app/tools/verify_assets.py
+RUN python tools/verify_assets.py --tokenizer-file /opt/tokenizers/cl100k_base.tiktoken \
+    && chmod -R a=rX /opt/tokenizers /app
+USER 10001:10001
+ENTRYPOINT ["akay-index-content"]
